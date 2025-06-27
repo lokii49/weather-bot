@@ -79,7 +79,7 @@ def tweet_weather():
     telangana = build_zone_summary(ZONES)
     hyderabad = build_zone_summary(HYD_ZONES)
 
-    tweet = f"🌤️ Telangana Weather Update – {date_str}\n"
+    tweet = f"Testing Automation \n🌤️ Telangana Weather Update – {date_str}\n"
     tweet += telangana or "\nNo significant weather alerts in Telangana today.\n"
     if hyderabad:
         tweet += "\n🏙️ Hyderabad Zones:\n" + hyderabad
