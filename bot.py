@@ -67,22 +67,32 @@ def get_time_of_day(dt_unix):
     return "night"
 
 def is_significant_forecast(forecast):
-    if not forecast or "hourly" not in forecast: return []
+    if not forecast or "hourly" not in forecast:
+        return []
+
     alerts, seen = [], set()
     for hour in forecast["hourly"][:24]:
         temp = hour["temp"]
         pop = hour.get("pop", 0)
         desc = hour["weather"][0]["description"].lower()
         time_phrase = get_time_of_day(hour["dt"])
-        if ("rain" in desc or pop > 0.5) and "rain" not in seen:
-            alerts.append(f"🌧️ Rain in {time_phrase}")
-            seen.add("rain")
-        if temp >= 38 and "heat" not in seen:
+
+        # 🌧️ Better rain detection: include drizzle/light rain and lower pop
+        if any(r in desc for r in ["rain", "drizzle", "showers"]) or pop >= 0.3:
+            if "rain" not in seen:
+                alerts.append(f"🌧️ Rain in {time_phrase}")
+                seen.add("rain")
+
+        # 🔥 Heat alert
+        if temp >= 36 and "heat" not in seen:
             alerts.append(f"🔥 Heat in {time_phrase}")
             seen.add("heat")
-        if temp <= 18 and "cold" not in seen:
+
+        # ❄️ Cold alert
+        if temp <= 20 and "cold" not in seen:
             alerts.append(f"❄️ Cold in {time_phrase}")
             seen.add("cold")
+
     return alerts
 
 def prepare_zone_alerts(zones):
