@@ -104,22 +104,25 @@ def build_zone_summary(zones):
     return summary.strip()
 
 def generate_ai_tweet(summary_text):
-    prompt = f"""You're a smart weather bot writing friendly, concise, and human-like tweets.
+    prompt = f"""You're a smart weather bot writing concise, human-friendly tweets.
 
-Rewrite this 24-hour Telangana weather forecast into a tweet under 280 characters. Use natural emojis and make it easy to understand:
+Rewrite this 24-hour Telangana weather forecast into a tweet **strictly under 280 characters**. Use emojis naturally and keep it easy to read. Skip locations with no alerts. Avoid repeating the word "forecast".
 
+Forecast summary:
 \"\"\"{summary_text}\"\"\"
-Tweet:"""
+
+Tweet (max 280 chars):"""
     try:
         response = cohere_client.generate(
             model="command-r-plus",
             prompt=prompt,
-            max_tokens=150,
-            temperature=0.8,
+            max_tokens=150,  # ~150 tokens ~ 200-220 words max
+            temperature=0.7,
             k=0,
             stop_sequences=["--"]
         )
-        return response.generations[0].text.strip()
+        tweet = response.generations[0].text.strip()
+        return tweet[:280]  # Just in case, truncate to 280 characters
     except Exception as e:
         print("❌ Cohere error:", e)
         return None
