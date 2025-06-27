@@ -1,16 +1,15 @@
 import os
 import requests
 import tweepy
-import logging
 from dotenv import load_dotenv
 from pathlib import Path
 from datetime import datetime
+import pytz
 
-# ==== Setup ====
+# ==== Load ENV ====
 load_dotenv(dotenv_path=Path('.') / '.env')
-logging.basicConfig(level=logging.INFO)
 
-# ==== ZONAL DEFINITIONS ====
+# ==== ZONES ====
 ZONES = {
     "North Telangana": ["Adilabad", "Nirmal", "Asifabad", "Mancherial", "Kamareddy"],
     "South Telangana": ["Mahabubnagar", "Gadwal", "Wanaparthy", "Nagarkurnool", "Narayanpet"],
@@ -27,67 +26,104 @@ HYD_ZONES = {
     "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
 }
 
-# ==== WEATHER SETUP ====
-API_KEY = os.getenv("OWM_API_KEY")
-if not API_KEY:
-    raise EnvironmentError("❌ Missing OpenWeatherMap API key in environment variables.")
+# ==== API ====
+OWM_API_KEY = os.getenv("OWM_API_KEY")
+BASE_FORECAST_URL = "https://api.openweathermap.org/data/2.5/onecall?lat={}&lon={}&exclude=minutely&appid={}&units=metric"
 
-GEOCODE_URL = "http://api.openweathermap.org/geo/1.0/direct?q={}&limit=1&appid={}"
-FORECAST_URL = "https://api.openweathermap.org/data/2.5/onecall?lat={}&lon={}&exclude=minutely,current,alerts&units=metric&appid={}"
-
-# Cache for coordinates
-city_coords_cache = {}
-
-def get_coords(city):
-    if city in city_coords_cache:
-        return city_coords_cache[city]
+# ==== GEOLOCATION ====
+def get_coordinates(city):
     try:
-        r = requests.get(GEOCODE_URL.format(city, API_KEY), timeout=10).json()
+        url = f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={OWM_API_KEY}"
+        r = requests.get(url, timeout=10).json()
         if not r:
-            logging.warning(f"⚠️ No coordinates found for {city}")
             return None
-        lat, lon = r[0]["lat"], r[0]["lon"]
-        city_coords_cache[city] = (lat, lon)
-        return lat, lon
-    except Exception as e:
-        logging.error(f"Error fetching coordinates for {city}: {e}")
+        return r[0]["lat"], r[0]["lon"]
+    except:
         return None
 
+# ==== FETCH FORECAST ====
 def fetch_forecast(city):
-    coords = get_coords(city)
+    coords = get_coordinates(city)
     if not coords:
         return None
     lat, lon = coords
     try:
-        r = requests.get(FORECAST_URL.format(lat, lon, API_KEY), timeout=10).json()
-        return r  # contains 'hourly', 'daily'
-    except Exception as e:
-        logging.error(f"Error fetching forecast for {city}: {e}")
+        url = BASE_FORECAST_URL.format(lat, lon, OWM_API_KEY)
+        r = requests.get(url, timeout=10).json()
+        return r
+    except:
         return None
 
+# ==== TIME OF DAY LABEL ====
+def get_time_of_day(dt_unix):
+    tz = pytz.timezone("Asia/Kolkata")
+    hour = datetime.fromtimestamp(dt_unix, tz).hour
+    if 0 <= hour <= 2:
+        return "midnight"
+    elif 3 <= hour <= 6:
+        return "early morning"
+    elif 7 <= hour <= 10:
+        return "morning"
+    elif 11 <= hour <= 12:
+        return "late morning"
+    elif 13 <= hour <= 15:
+        return "afternoon"
+    elif 16 <= hour <= 17:
+        return "late afternoon"
+    elif 18 <= hour <= 20:
+        return "evening"
+    elif 21 <= hour <= 23:
+        return "night"
+    return "sometime"
+
+# ==== SIGNIFICANT WEATHER LOGIC ====
 def is_significant_forecast(forecast):
-    if not forecast or "daily" not in forecast:
+    if not forecast or "daily" not in forecast or "hourly" not in forecast:
         return []
 
     alerts = []
-    today = forecast["daily"][0]
-    max_temp = today["temp"]["max"]
-    min_temp = today["temp"]["min"]
-    desc = today["weather"][0]["description"].lower()
-    pop = today.get("pop", 0)
-    rain = today.get("rain", 0)
+    seen_types = set()
 
-    if "rain" in desc or rain > 1 or pop > 0.5:
-        alerts.append("🌧️ Rain")
-    if max_temp >= 38:
-        alerts.append("🔥 Heat")
-    if min_temp <= 18:
-        alerts.append("❄️ Cold")
+    # Hourly: next 24h
+    for hour in forecast["hourly"][:24]:
+        temp = hour["temp"]
+        pop = hour.get("pop", 0)
+        desc = hour["weather"][0]["description"].lower()
+        time_phrase = get_time_of_day(hour["dt"])
+
+        if "rain" in desc or pop > 0.5:
+            if "rain" not in seen_types:
+                alerts.append(f"🌧️ Rain likely {time_phrase}")
+                seen_types.add("rain")
+        if temp >= 38 and "heat" not in seen_types:
+            alerts.append(f"🔥 Heat expected {time_phrase}")
+            seen_types.add("heat")
+        if temp <= 18 and "cold" not in seen_types:
+            alerts.append(f"❄️ Cold expected {time_phrase}")
+            seen_types.add("cold")
+
+    # Daily: next 2 days
+    for day in forecast["daily"][1:3]:
+        max_temp = day["temp"]["max"]
+        min_temp = day["temp"]["min"]
+        desc = day["weather"][0]["description"].lower()
+        pop = day.get("pop", 0)
+        rain = day.get("rain", 0)
+
+        if "rain" not in seen_types and ("rain" in desc or pop > 0.5 or rain > 1):
+            alerts.append("🌧️ Rain expected in coming days")
+            seen_types.add("rain")
+        if "heat" not in seen_types and max_temp >= 38:
+            alerts.append("🔥 Heatwave in coming days")
+            seen_types.add("heat")
+        if "cold" not in seen_types and min_temp <= 18:
+            alerts.append("❄️ Cold spell likely in coming days")
+            seen_types.add("cold")
 
     return alerts
 
-# ==== FORMAT WEATHER BULLETIN ====
-def build_zone_summary_forecast(zones):
+# ==== BUILD SUMMARY ====
+def build_zone_summary(zones):
     summary = ""
     for zone, cities in zones.items():
         events = []
@@ -95,13 +131,12 @@ def build_zone_summary_forecast(zones):
             forecast = fetch_forecast(city)
             alerts = is_significant_forecast(forecast)
             if alerts:
-                alert_str = ", ".join(alerts)
-                events.append(f"{city} – {alert_str}")
+                events.append(f"{city} – " + ", ".join(alerts))
         if events:
             summary += f"\n📍 {zone}:\n" + "\n".join(events) + "\n"
-    return summary
+    return summary.strip()
 
-# ==== TWITTER API SETUP ====
+# ==== TWITTER ====
 client = tweepy.Client(
     bearer_token=os.getenv("BEARER_TOKEN"),
     consumer_key=os.getenv("API_KEY"),
@@ -110,24 +145,24 @@ client = tweepy.Client(
     access_token_secret=os.getenv("ACCESS_SECRET")
 )
 
-# ==== COMPOSE AND POST TWEET ====
-def tweet_weather_forecast():
+# ==== COMPOSE AND POST ====
+def tweet_weather():
     date_str = datetime.now().strftime("%d %b %Y")
-    telangana = build_zone_summary_forecast(ZONES)
-    hyderabad = build_zone_summary_forecast(HYD_ZONES)
-
     tweet = f"🌤️ Telangana Weather Forecast – {date_str}\n"
-    tweet += telangana or "\n✅ No significant weather alerts in Telangana today.\n"
-    if hyderabad:
-        tweet += f"\n🏙️ Hyderabad Zones:\n{hyderabad}"
 
-    # Trim if tweet is too long
+    telangana = build_zone_summary(ZONES)
+    hyderabad = build_zone_summary(HYD_ZONES)
+
+    tweet += telangana if telangana else "\n✅ No major weather alerts in Telangana.\n"
+    if hyderabad:
+        tweet += "\n🏙️ Hyderabad Zones:\n" + hyderabad
+
     if len(tweet) > 280:
         tweet = tweet[:275] + "..."
 
     res = client.create_tweet(text=tweet)
     print("✅ Tweeted successfully! Tweet ID:", res.data["id"])
 
-# ==== EXECUTE ONCE ====
+# ==== RUN ====
 if __name__ == "__main__":
-    tweet_weather_forecast()
+    tweet_weather()
