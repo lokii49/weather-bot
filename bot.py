@@ -186,6 +186,7 @@ Hyderabad Zones:
     try:
         if len(ai_tweet) > 280:
             #post_tweet_thread(ai_tweet, client)
+            pass
         else:
             res = client.create_tweet(text=ai_tweet)
             print("✅ Tweeted successfully! Tweet ID:", res.data["id"])
