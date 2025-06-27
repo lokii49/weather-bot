@@ -3,11 +3,68 @@ import requests
 import tweepy
 from dotenv import load_dotenv
 from pathlib import Path
+from datetime import datetime
 
-# Load env vars
+# Load .env variables
 load_dotenv(dotenv_path=Path('.') / '.env')
 
-# Twitter Client Setup
+# ==== ZONAL DEFINITIONS ====
+ZONES = {
+    "North Telangana": ["Adilabad", "Nirmal", "Asifabad", "Mancherial", "Kamareddy"],
+    "South Telangana": ["Mahabubnagar", "Gadwal", "Wanaparthy", "Nagarkurnool", "Narayanpet"],
+    "East Telangana": ["Khammam", "Bhadrachalam", "Mahabubabad", "Warangal", "Suryapet"],
+    "West Telangana": ["Vikarabad", "Sangareddy", "Zaheerabad"],
+    "Central Telangana": ["Hyderabad", "Medchal", "Siddipet", "Nalgonda", "Karimnagar"]
+}
+
+HYD_ZONES = {
+    "North Hyderabad": ["Kompally", "Medchal", "Suchitra", "Bolarum"],
+    "South Hyderabad": ["LB Nagar", "Malakpet", "Falaknuma", "Kanchanbagh"],
+    "East Hyderabad": ["Uppal", "Ghatkesar", "Keesara"],
+    "West Hyderabad": ["Gachibowli", "Kondapur", "Madhapur", "Miyapur"],
+    "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
+}
+
+# ==== WEATHER SETUP ====
+API_KEY = os.getenv("OWM_API_KEY")
+BASE_URL = "https://api.openweathermap.org/data/2.5/weather?q={}&appid={}&units=metric"
+
+def fetch_weather(city):
+    try:
+        url = BASE_URL.format(city, API_KEY)
+        r = requests.get(url, timeout=10).json()
+        if r.get("main") is None:
+            return None
+        temp = r["main"]["temp"]
+        desc = r["weather"][0]["description"].lower()
+        return {"city": city, "temp": temp, "desc": desc}
+    except:
+        return None
+
+def is_significant(weather):
+    if not weather:
+        return False
+    return (
+        "rain" in weather["desc"] or
+        weather["temp"] >= 38 or
+        weather["temp"] <= 18
+    )
+
+# ==== FORMAT WEATHER BULLETIN ====
+def build_zone_summary(zones):
+    summary = ""
+    for zone, cities in zones.items():
+        events = []
+        for city in cities:
+            w = fetch_weather(city)
+            if is_significant(w):
+                emoji = "🌧️" if "rain" in w["desc"] else "🔥" if w["temp"] >= 38 else "❄️"
+                events.append(f"{emoji} {city} ({round(w['temp'])}°C)")
+        if events:
+            summary += f"\n📍 {zone}:\n" + ", ".join(events) + "\n"
+    return summary
+
+# ==== TWITTER API SETUP ====
 client = tweepy.Client(
     bearer_token=os.getenv("BEARER_TOKEN"),
     consumer_key=os.getenv("API_KEY"),
@@ -16,47 +73,22 @@ client = tweepy.Client(
     access_token_secret=os.getenv("ACCESS_SECRET")
 )
 
-# Weather Fetching
-def get_weather_summary():
-    LOCATIONS = [
-        "Hyderabad", "Warangal", "Karimnagar", "Khammam", "Adilabad", "Nizamabad", "Mahbubnagar",
-        "Mancherial", "Nalgonda", "Siddipet", "Bodhan", "Jagtial", "Sircilla", "Zaheerabad",
-        "Vikarabad", "Kothagudem", "Bhupalpally", "Suryapet", "Bellampalle", "Gadwal", "Miryalaguda",
-        "Narayanpet", "Tandur", "Medak", "Yellandu", "Bhongir", "Peddapalli", "Kamareddy", "Koratla"
-    ]
+# ==== COMPOSE AND POST TWEET ====
+def tweet_weather():
+    date_str = datetime.now().strftime("%d %b %Y")
+    telangana = build_zone_summary(ZONES)
+    hyderabad = build_zone_summary(HYD_ZONES)
 
-    WEATHER_API_KEY = os.getenv("OWM_API_KEY")
-    summary = ["🌤️ Telangana Weather Highlights:\n"]
+    tweet = f"🌤️ Telangana Weather Update – {date_str}\n"
+    tweet += telangana or "\nNo significant weather alerts in Telangana today.\n"
+    if hyderabad:
+        tweet += "\n🏙️ Hyderabad Zones:\n" + hyderabad
 
-    try:
-        for city in LOCATIONS:
-            url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric"
-            res = requests.get(url).json()
+    if len(tweet) > 280:
+        tweet = tweet[:275] + "..."
 
-            if "main" not in res or "weather" not in res:
-                continue
+    res = client.create_tweet(text=tweet)
+    print("✅ Tweeted successfully! Tweet ID:", res.data["id"])
 
-            temp = round(res["main"]["temp"])
-            desc = res["weather"][0]["description"].capitalize()
-            condition = desc.lower()
-
-            # Only include if significant weather
-            if "rain" in condition or "storm" in condition or temp > 38 or temp < 15:
-                emoji = "🌧️" if "rain" in condition or "storm" in condition else "🔥" if temp > 38 else "❄️"
-                summary.append(f"{emoji} {city}: {temp}°C, {desc}")
-
-        if len(summary) == 1:
-            return "🌤️ Telangana weather is calm and moderate today. #Telangana #WeatherBot"
-
-        return "\n".join(summary[:10])  # limit to avoid tweet overflow
-    except Exception as e:
-        return f"⚠️ Error fetching weather: {e}"
-
-# Main execution
-if __name__ == "__main__":
-    weather_text = get_weather_summary()
-    try:
-        response = client.create_tweet(text=weather_text)
-        print("✅ Tweeted successfully! Tweet ID:", response.data["id"])
-    except Exception as e:
-        print("❌ Failed to tweet:", e)
+# ==== EXECUTE ONCE ====
+tweet_weather()
