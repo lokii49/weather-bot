@@ -35,7 +35,9 @@ client = tweepy.Client(
 )
 
 OWM_API_KEY = os.getenv("OWM_API_KEY")
+
 BASE_FORECAST_URL = "https://api.openweathermap.org/data/2.5/onecall?lat={}&lon={}&exclude=minutely&appid={}&units=metric"
+BASE_CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather?q={}&appid={}&units=metric"
 
 def get_coordinates(city):
     try:
@@ -67,6 +69,28 @@ def fetch_forecast(city):
     except Exception as e:
         print(f"❌ Error fetching forecast for {city}:", e)
         return None
+
+def fetch_current_weather(city):
+    try:
+        url = BASE_CURRENT_URL.format(city, OWM_API_KEY)
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        if response.status_code != 200 or "weather" not in data:
+            print(f"⚠️ No current weather data for {city}: {data}")
+            return None
+        print(f"✅ Current weather fetched for {city}")
+        return data
+    except Exception as e:
+        print(f"❌ Error fetching current weather for {city}:", e)
+        return None
+
+def summarize_current_weather(data):
+    if not data:
+        return None
+    desc = data["weather"][0]["description"].capitalize()
+    temp = data["main"]["temp"]
+    city = data["name"]
+    return f"{city}: {desc}, {temp}°C"
 
 def get_time_of_day(dt_unix):
     hour = datetime.fromtimestamp(dt_unix, pytz.timezone("Asia/Kolkata")).hour
@@ -158,6 +182,7 @@ Tweets:
 def tweet_weather():
     date_str = datetime.now().strftime("%d %b")
 
+    # Forecast-based alerts
     tg_alerts = prepare_zone_alerts(ZONES)
     hyd_alerts = prepare_zone_alerts(HYD_ZONES)
 
@@ -171,6 +196,14 @@ def tweet_weather():
 
     summary_text = format_zone_summary(combined_alerts)
 
+    # Add current weather info for Hyderabad
+    current_weather_data = fetch_current_weather("Hyderabad")
+    current_summary = summarize_current_weather(current_weather_data)
+
+    if current_summary:
+        summary_text = f"Current weather – {current_summary}\n\n" + summary_text
+
+    # AI-generated tweets
     ai_tweets = generate_ai_tweets(summary_text, date_str, num_variants=3)
 
     if not ai_tweets:
