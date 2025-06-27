@@ -3,30 +3,34 @@ import requests
 import tweepy
 from dotenv import load_dotenv
 from pathlib import Path
+import schedule
+import time
 
-# Load environment variables from .env
+# Load environment variables
 load_dotenv(dotenv_path=Path('.') / '.env')
 
-# === Configuration ===
+# Config
 CITY = "Hyderabad"
 WEATHER_API_KEY = os.getenv("OWM_API_KEY")
-
-# Build OpenWeatherMap URL
 weather_url = f"http://api.openweathermap.org/data/2.5/weather?q={CITY}&appid={WEATHER_API_KEY}&units=metric"
 
-# === Weather Fetcher ===
+# Get weather data
 def get_weather():
-    response = requests.get(weather_url)
-    data = response.json()
+    try:
+        response = requests.get(weather_url)
+        data = response.json()
 
-    if response.status_code != 200 or "main" not in data:
-        return "⚠️ Unable to fetch weather data right now."
+        if response.status_code != 200 or "main" not in data:
+            return "⚠️ Unable to fetch weather data."
 
-    temp = data['main']['temp']
-    desc = data['weather'][0]['description'].capitalize()
-    return f"🌤️ Weather in {CITY} today:\nTemperature: {temp}°C\nCondition: {desc}.\n#weather #bot"
+        temp = data['main']['temp']
+        desc = data['weather'][0]['description'].capitalize()
+        emoji = "☀️" if "clear" in desc.lower() else "🌧️" if "rain" in desc.lower() else "⛅"
+        return f"{emoji} Weather in {CITY} today:\nTemp: {temp}°C\nCondition: {desc}."
+    except Exception as e:
+        return f"⚠️ Weather fetch error: {e}"
 
-# === Twitter API v2 client ===
+# Twitter API
 client = tweepy.Client(
     bearer_token=os.getenv("BEARER_TOKEN"),
     consumer_key=os.getenv("API_KEY"),
@@ -35,7 +39,21 @@ client = tweepy.Client(
     access_token_secret=os.getenv("ACCESS_SECRET")
 )
 
-# === Post weather tweet ===
-weather_text = get_weather()
-response = client.create_tweet(text=weather_text)
-print("✅ Tweeted successfully! Tweet ID:", response.data['id'])
+# Post tweet
+def job():
+    try:
+        weather = get_weather()
+        response = client.create_tweet(text=weather)
+        print("✅ Tweeted!", response.data["id"])
+    except Exception as e:
+        print("❌ Failed to tweet:", e)
+
+# Tweet once on startup
+job()
+
+# Schedule daily tweet
+schedule.every().day.at("08:00").do(job)
+
+while True:
+    schedule.run_pending()
+    time.sleep(60)
