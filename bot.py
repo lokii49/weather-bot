@@ -9,7 +9,7 @@ from datetime import datetime
 import pytz
 
 # ==== Load ENV ====
-load_dotenv(dotenv_path=Path('.') / '.env')
+#load_dotenv(dotenv_path=Path('.') / '.env')
 
 # ==== ZONES ====
 ZONES = {
@@ -30,7 +30,8 @@ HYD_ZONES = {
 
 # ==== API Keys ====
 OWM_API_KEY = os.getenv("OWM_API_KEY")
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+#openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai_client = os.getenv("OPENAI_API_KEY")
 
 # ==== Tweepy Client ====
 client = tweepy.Client(
