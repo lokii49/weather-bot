@@ -3,4 +3,4 @@ python-dotenv
 requests
 schedule
 pytz
-openai
+cohere
