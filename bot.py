@@ -143,15 +143,16 @@ Tweet:"""
 
     try:
         response = cohere_client.chat(
-        model="command-r-plus",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.8,
-        max_tokens=150
-    )
-    return response.text.strip()
+            model="command-r-plus",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.8,
+            max_tokens=150
+        )
+        return response.text.strip()
     except Exception as e:
         print("❌ Cohere error:", e)
         return None
+
         
 # ==== Main ====
 def tweet_weather():
