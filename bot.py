@@ -77,18 +77,15 @@ def is_significant_forecast(forecast):
         desc = hour["weather"][0]["description"].lower()
         time_phrase = get_time_of_day(hour["dt"])
 
-        # 🌧️ Better rain detection: include drizzle/light rain and lower pop
         if any(r in desc for r in ["rain", "drizzle", "showers"]) or pop >= 0.3:
             if "rain" not in seen:
                 alerts.append(f"🌧️ Rain in {time_phrase}")
                 seen.add("rain")
 
-        # 🔥 Heat alert
         if temp >= 36 and "heat" not in seen:
             alerts.append(f"🔥 Heat in {time_phrase}")
             seen.add("heat")
 
-        # ❄️ Cold alert
         if temp <= 20 and "cold" not in seen:
             alerts.append(f"❄️ Cold in {time_phrase}")
             seen.add("cold")
@@ -102,15 +99,13 @@ def prepare_zone_alerts(zones):
             forecast = fetch_forecast(city)
             alerts = is_significant_forecast(forecast)
             if alerts:
-                zone_alerts[zone] = alerts[0]  # Take first significant alert
+                zone_alerts[zone] = alerts[0]
                 break
     return zone_alerts
 
 def format_zone_summary(zone_alerts):
     lines = []
     for zone, alert in zone_alerts.items():
-        short_zone = zone.replace("Telangana", "").replace("Hyderabad", "").strip()
-        name = short_zone or zone
         lines.append(f"{zone}: {alert}")
     return "\n".join(lines)
 
@@ -140,7 +135,6 @@ Tweets:
         )
         output = response.generations[0].text.strip()
         tweets = [line.strip("1234567890. ").strip() for line in output.split("\n") if line.strip()]
-        # Ensure all tweets are ≤ 280 chars
         return [t[:280] for t in tweets if t][:num_variants]
     except Exception as e:
         print("❌ Cohere error:", e)
@@ -148,23 +142,19 @@ Tweets:
 
 def tweet_weather():
     date_str = datetime.now().strftime("%d %b")
-    
-    # Prepare alerts
+
     tg_alerts = prepare_zone_alerts(ZONES)
     hyd_alerts = prepare_zone_alerts(HYD_ZONES)
-    
-    # Merge all alerts
-    combined_alerts = {**tg_alerts, "Hyderabad": next(iter(hyd_alerts.values()), None)} if hyd_alerts else tg_alerts
+
+    combined_alerts = {**tg_alerts, **hyd_alerts}
 
     if not combined_alerts:
         print("ℹ️ No significant alerts to post.")
         return
 
-    # Prepare summary for AI
     summary_text = format_zone_summary(combined_alerts)
-    
     ai_tweets = generate_ai_tweets(summary_text, date_str, num_variants=3)
-    
+
     if not ai_tweets:
         print("⚠️ Failed to generate AI tweets.")
         return
