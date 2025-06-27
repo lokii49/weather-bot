@@ -1,12 +1,12 @@
 import os
 import requests
 import tweepy
-import openai
+import random
+from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
 from datetime import datetime
 import pytz
-import random
 
 # ==== Load ENV ====
 load_dotenv(dotenv_path=Path('.') / '.env')
@@ -30,9 +30,9 @@ HYD_ZONES = {
 
 # ==== API Keys ====
 OWM_API_KEY = os.getenv("OWM_API_KEY")
-openai.api_key = os.getenv("OPENAI_API_KEY")
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ==== Tweepy ====
+# ==== Tweepy Client ====
 client = tweepy.Client(
     bearer_token=os.getenv("BEARER_TOKEN"),
     consumer_key=os.getenv("API_KEY"),
@@ -41,7 +41,7 @@ client = tweepy.Client(
     access_token_secret=os.getenv("ACCESS_SECRET")
 )
 
-# ==== Weather URLs ====
+# ==== Weather API URL ====
 BASE_FORECAST_URL = "https://api.openweathermap.org/data/2.5/onecall?lat={}&lon={}&exclude=minutely&appid={}&units=metric"
 
 # ==== GEOLOCATION ====
@@ -151,9 +151,8 @@ Rewrite this 24-hour Telangana weather forecast into a tweet under 280 character
 \"\"\"{summary_text}\"\"\"
 Tweet:
 """
-
     try:
-        response = openai.ChatCompletion.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are a helpful weather bot writing engaging Twitter updates."},
@@ -162,7 +161,7 @@ Tweet:
             temperature=0.8,
             max_tokens=150
         )
-        return response.choices[0].message["content"].strip()
+        return response.choices[0].message.content.strip()
     except Exception as e:
         print("❌ OpenAI error:", e)
         return None
@@ -198,10 +197,10 @@ def tweet_weather():
 Weather forecast for Telangana on {date_str}:
 
 Telangana Zones:
-{telangana if telangana else 'No significant alerts in Telangana.'}
+{telangana if telangana else 'No significant alerts.'}
 
 Hyderabad Zones:
-{hyderabad if hyderabad else 'No significant alerts in Hyderabad.'}
+{hyderabad if hyderabad else 'No significant alerts.'}
 """
 
     ai_tweet = generate_ai_tweet(summary_for_ai)
