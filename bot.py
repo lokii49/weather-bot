@@ -1,20 +1,13 @@
 import os
 import requests
 import tweepy
-from dotenv import load_dotenv
-from pathlib import Path
-import schedule
-import time
-
-# Load environment variables
-load_dotenv(dotenv_path=Path('.') / '.env')
 
 # Config
 CITY = "Hyderabad"
 WEATHER_API_KEY = os.getenv("OWM_API_KEY")
 weather_url = f"http://api.openweathermap.org/data/2.5/weather?q={CITY}&appid={WEATHER_API_KEY}&units=metric"
 
-# Get weather data
+# Weather fetch
 def get_weather():
     try:
         response = requests.get(weather_url)
@@ -30,30 +23,21 @@ def get_weather():
     except Exception as e:
         return f"⚠️ Weather fetch error: {e}"
 
-# Twitter API
-client = tweepy.Client(
-    bearer_token=os.getenv("BEARER_TOKEN"),
-    consumer_key=os.getenv("API_KEY"),
-    consumer_secret=os.getenv("API_SECRET"),
-    access_token=os.getenv("ACCESS_TOKEN"),
-    access_token_secret=os.getenv("ACCESS_SECRET")
-)
-
-# Post tweet
-def job():
+# Tweet once
+def tweet_weather():
     try:
+        client = tweepy.Client(
+            bearer_token=os.getenv("BEARER_TOKEN"),
+            consumer_key=os.getenv("API_KEY"),
+            consumer_secret=os.getenv("API_SECRET"),
+            access_token=os.getenv("ACCESS_TOKEN"),
+            access_token_secret=os.getenv("ACCESS_SECRET")
+        )
         weather = get_weather()
         response = client.create_tweet(text=weather)
         print("✅ Tweeted!", response.data["id"])
     except Exception as e:
-        print("❌ Failed to tweet:", e)
+        print("❌ Tweet failed:", e)
 
-# Tweet once on startup
-job()
-
-# Schedule daily tweet
-schedule.every().day.at("08:00").do(job)
-
-while True:
-    schedule.run_pending()
-    time.sleep(60)
+# Run once
+tweet_weather()
