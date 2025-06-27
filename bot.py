@@ -75,84 +75,99 @@ def is_significant_forecast(forecast):
         desc = hour["weather"][0]["description"].lower()
         time_phrase = get_time_of_day(hour["dt"])
         if ("rain" in desc or pop > 0.5) and "rain" not in seen:
-            alerts.append(f"🌧️ Rain likely {time_phrase}")
+            alerts.append(f"🌧️ Rain in {time_phrase}")
             seen.add("rain")
         if temp >= 38 and "heat" not in seen:
-            alerts.append(f"🔥 Heat expected {time_phrase}")
+            alerts.append(f"🔥 Heat in {time_phrase}")
             seen.add("heat")
         if temp <= 18 and "cold" not in seen:
-            alerts.append(f"❄️ Cold expected {time_phrase}")
+            alerts.append(f"❄️ Cold in {time_phrase}")
             seen.add("cold")
     return alerts
 
-def humanize_alerts(city, alerts):
-    formats = [
-        f"{city} might experience {', '.join(alerts)}.",
-        f"⚠️ Heads up in {city}: {', '.join(alerts)}.",
-        f"Forecast for {city}: {', '.join(alerts)}.",
-        f"Conditions in {city} suggest {', '.join(alerts)}."
-    ]
-    return random.choice(formats)
-
-def build_zone_summary(zones):
-    summary = ""
+def prepare_zone_alerts(zones):
+    zone_alerts = {}
     for zone, cities in zones.items():
-        events = [humanize_alerts(city, is_significant_forecast(fetch_forecast(city)))
-                  for city in cities if is_significant_forecast(fetch_forecast(city))]
-        if events:
-            summary += f"\n📍 {zone}:\n" + "\n".join(events) + "\n"
-    return summary.strip()
+        for city in cities:
+            forecast = fetch_forecast(city)
+            alerts = is_significant_forecast(forecast)
+            if alerts:
+                zone_alerts[zone] = alerts[0]  # Take first significant alert
+                break
+    return zone_alerts
 
-def generate_ai_tweet(summary_text):
-    prompt = f"""You're a smart weather bot writing concise, human-friendly tweets.
+def format_zone_summary(zone_alerts):
+    lines = []
+    for zone, alert in zone_alerts.items():
+        short_zone = zone.replace("Telangana", "").replace("Hyderabad", "").strip()
+        name = short_zone or zone
+        lines.append(f"{zone}: {alert}")
+    return "\n".join(lines)
 
-Rewrite this 24-hour Telangana weather forecast into a tweet **strictly under 280 characters**. Use emojis naturally and keep it easy to read. Skip locations with no alerts. Avoid repeating the word "forecast".
+def generate_ai_tweets(summary_text, date_str, num_variants=3):
+    prompt = f"""
+You're a friendly Indian weather bot. Based on the forecast summary below, write {num_variants} tweet variations.
+
+Each tweet must:
+- Be under 280 characters
+- Start with a weather emoji headline like: "🌦️ Telangana Weather Update – {date_str}"
+- Include a few zones with bullet-point emojis like 📍 and a short weather alert (e.g., "📍 North Telangana: 🌧️ Rain in morning")
+- End with a friendly tip (e.g., "Stay safe!" or "Carry an umbrella! ☂️")
+- Do NOT use hashtags
 
 Forecast summary:
 \"\"\"{summary_text}\"\"\"
 
-Tweet (max 280 chars):"""
+Tweets:
+1."""
     try:
         response = cohere_client.generate(
             model="command-r-plus",
             prompt=prompt,
-            max_tokens=150,  # ~150 tokens ~ 200-220 words max
+            max_tokens=500,
             temperature=0.7,
-            k=0,
             stop_sequences=["--"]
         )
-        tweet = response.generations[0].text.strip()
-        return tweet[:280]  # Just in case, truncate to 280 characters
+        output = response.generations[0].text.strip()
+        tweets = [line.strip("1234567890. ").strip() for line in output.split("\n") if line.strip()]
+        # Ensure all tweets are ≤ 280 chars
+        return [t[:280] for t in tweets if t][:num_variants]
     except Exception as e:
         print("❌ Cohere error:", e)
-        return None
+        return []
 
 def tweet_weather():
-    date_str = datetime.now().strftime("%d %b %Y")
-    telangana = build_zone_summary(ZONES)
-    hyderabad = build_zone_summary(HYD_ZONES)
+    date_str = datetime.now().strftime("%d %b")
+    
+    # Prepare alerts
+    tg_alerts = prepare_zone_alerts(ZONES)
+    hyd_alerts = prepare_zone_alerts(HYD_ZONES)
+    
+    # Merge all alerts
+    combined_alerts = {**tg_alerts, "Hyderabad": next(iter(hyd_alerts.values()), None)} if hyd_alerts else tg_alerts
 
-    summary = f"""Weather forecast for Telangana on {date_str}:
+    if not combined_alerts:
+        print("ℹ️ No significant alerts to post.")
+        return
 
-Telangana Zones:
-{telangana or 'No significant alerts in Telangana.'}
+    # Prepare summary for AI
+    summary_text = format_zone_summary(combined_alerts)
+    
+    ai_tweets = generate_ai_tweets(summary_text, date_str, num_variants=3)
+    
+    if not ai_tweets:
+        print("⚠️ Failed to generate AI tweets.")
+        return
 
-Hyderabad Zones:
-{hyderabad or 'No significant alerts in Hyderabad.'}""".strip()
-
-    ai_tweet = generate_ai_tweet(summary)
-    if not ai_tweet:
-        print("⚠️ GPT fallback. Posting basic tweet.")
-        ai_tweet = f"🌤️ Telangana Weather – {date_str}\n{summary[:250]}..."
-
-    try:
-        if len(ai_tweet) <= 280:
-            res = client.create_tweet(text=ai_tweet)
-            print("✅ Tweeted successfully! Tweet ID:", res.data["id"])
-        else:
-            print("⚠️ Tweet too long. Skipping post.")
-    except tweepy.TooManyRequests:
-        print("❌ Rate limit hit. Try again later.")
+    for i, tweet in enumerate(ai_tweets):
+        try:
+            res = client.create_tweet(text=tweet)
+            print(f"✅ Tweet {i+1} posted! Tweet ID:", res.data["id"])
+        except tweepy.TooManyRequests:
+            print("❌ Rate limit hit. Try again later.")
+            break
+        except Exception as e:
+            print(f"❌ Error tweeting variant {i+1}:", e)
 
 if __name__ == "__main__":
     tweet_weather()
