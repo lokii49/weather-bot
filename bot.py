@@ -10,6 +10,7 @@ import pytz
 
 # ==== Load ENV ====
 #load_dotenv(dotenv_path=Path('.') / '.env')
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ==== ZONES ====
 ZONES = {
