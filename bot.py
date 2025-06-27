@@ -1,7 +1,7 @@
 import os
 import requests
 import tweepy
-from openai import OpenAI
+import cohere
 from dotenv import load_dotenv
 from pathlib import Path
 from datetime import datetime
@@ -10,6 +10,8 @@ import random
 
 # ==== Load ENV ====
 load_dotenv(dotenv_path=Path('.') / '.env')
+# ==== Cohere Client ====
+cohere_client = cohere.Client(os.getenv("COHERE_API_KEY"))
 
 # ==== ZONES ====
 ZONES = {
@@ -30,12 +32,6 @@ HYD_ZONES = {
 
 # ==== API Clients ====
 OWM_API_KEY = os.getenv("OWM_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-if not OPENAI_API_KEY:
-    raise ValueError("Missing OpenAI API key. Check your .env or GitHub secrets.")
-
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 client = tweepy.Client(
     bearer_token=os.getenv("BEARER_TOKEN"),
@@ -136,29 +132,25 @@ def build_zone_summary(zones):
             summary += f"\n📍 {zone}:\n" + "\n".join(events) + "\n"
     return summary.strip()
 
-# ==== OpenAI ====
+# ==== GPT TWEET GENERATOR (Using Cohere) ====
 def generate_ai_tweet(summary_text):
-    prompt = f"""
-You're a smart weather bot writing friendly, concise, and human-like tweets.
+    prompt = f"""You're a smart weather bot writing friendly, concise, and human-like tweets.
 
 Rewrite this 24-hour Telangana weather forecast into a tweet under 280 characters. Use natural emojis and make it easy to understand:
 
 \"\"\"{summary_text}\"\"\"
-Tweet:
-"""
+Tweet:"""
+
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a helpful weather bot writing engaging Twitter updates."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.8,
-            max_tokens=150
-        )
-        return response.choices[0].message.content.strip()
+        response = cohere_client.chat(
+        model="command-r-plus",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.8,
+        max_tokens=150
+    )
+    return response.text.strip()
     except Exception as e:
-        print("❌ OpenAI error:", e)
+        print("❌ Cohere error:", e)
         return None
         
 # ==== Main ====
