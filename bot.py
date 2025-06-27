@@ -1,10 +1,12 @@
 import os
 import requests
 import tweepy
+import openai
 from dotenv import load_dotenv
 from pathlib import Path
 from datetime import datetime
 import pytz
+import random
 
 # ==== Load ENV ====
 load_dotenv(dotenv_path=Path('.') / '.env')
@@ -26,8 +28,20 @@ HYD_ZONES = {
     "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
 }
 
-# ==== API ====
+# ==== API Keys ====
 OWM_API_KEY = os.getenv("OWM_API_KEY")
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+# ==== Tweepy ====
+client = tweepy.Client(
+    bearer_token=os.getenv("BEARER_TOKEN"),
+    consumer_key=os.getenv("API_KEY"),
+    consumer_secret=os.getenv("API_SECRET"),
+    access_token=os.getenv("ACCESS_TOKEN"),
+    access_token_secret=os.getenv("ACCESS_SECRET")
+)
+
+# ==== Weather URLs ====
 BASE_FORECAST_URL = "https://api.openweathermap.org/data/2.5/onecall?lat={}&lon={}&exclude=minutely&appid={}&units=metric"
 
 # ==== GEOLOCATION ====
@@ -84,7 +98,6 @@ def is_significant_forecast(forecast):
     alerts = []
     seen_types = set()
 
-    # Hourly: next 24h
     for hour in forecast["hourly"][:24]:
         temp = hour["temp"]
         pop = hour.get("pop", 0)
@@ -102,25 +115,17 @@ def is_significant_forecast(forecast):
             alerts.append(f"❄️ Cold expected {time_phrase}")
             seen_types.add("cold")
 
-    # Daily: next 2 days
-    for day in forecast["daily"][1:3]:
-        max_temp = day["temp"]["max"]
-        min_temp = day["temp"]["min"]
-        desc = day["weather"][0]["description"].lower()
-        pop = day.get("pop", 0)
-        rain = day.get("rain", 0)
-
-        if "rain" not in seen_types and ("rain" in desc or pop > 0.5 or rain > 1):
-            alerts.append("🌧️ Rain expected in coming days")
-            seen_types.add("rain")
-        if "heat" not in seen_types and max_temp >= 38:
-            alerts.append("🔥 Heatwave in coming days")
-            seen_types.add("heat")
-        if "cold" not in seen_types and min_temp <= 18:
-            alerts.append("❄️ Cold spell likely in coming days")
-            seen_types.add("cold")
-
     return alerts
+
+# ==== HUMANIZED CITY ALERT ====
+def humanize_alerts(city, alerts):
+    patterns = [
+        f"{city} might experience {', '.join(alerts)}.",
+        f"⚠️ Heads up in {city}: {', '.join(alerts)}.",
+        f"Forecast for {city}: {', '.join(alerts)}.",
+        f"Conditions in {city} suggest {', '.join(alerts)}."
+    ]
+    return random.choice(patterns)
 
 # ==== BUILD SUMMARY ====
 def build_zone_summary(zones):
@@ -131,37 +136,85 @@ def build_zone_summary(zones):
             forecast = fetch_forecast(city)
             alerts = is_significant_forecast(forecast)
             if alerts:
-                events.append(f"{city} – " + ", ".join(alerts))
+                events.append(humanize_alerts(city, alerts))
         if events:
             summary += f"\n📍 {zone}:\n" + "\n".join(events) + "\n"
     return summary.strip()
 
-# ==== TWITTER ====
-client = tweepy.Client(
-    bearer_token=os.getenv("BEARER_TOKEN"),
-    consumer_key=os.getenv("API_KEY"),
-    consumer_secret=os.getenv("API_SECRET"),
-    access_token=os.getenv("ACCESS_TOKEN"),
-    access_token_secret=os.getenv("ACCESS_SECRET")
-)
+# ==== GPT TWEET GENERATOR ====
+def generate_ai_tweet(summary_text):
+    prompt = f"""
+You're a smart weather bot writing friendly, concise, and human-like tweets.
 
-# ==== COMPOSE AND POST ====
+Rewrite this 24-hour Telangana weather forecast into a tweet under 280 characters. Use natural emojis and make it easy to understand:
+
+\"\"\"{summary_text}\"\"\"
+Tweet:
+"""
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a helpful weather bot writing engaging Twitter updates."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.8,
+            max_tokens=150
+        )
+        return response.choices[0].message["content"].strip()
+    except Exception as e:
+        print("❌ OpenAI error:", e)
+        return None
+
+# ==== TWEET THREAD POSTING ====
+def post_tweet_thread(text, client):
+    chunks = []
+    while len(text) > 275:
+        cut = text[:275].rfind('\n')
+        if cut == -1:
+            cut = 275
+        chunks.append(text[:cut].strip())
+        text = text[cut:].strip()
+    chunks.append(text)
+
+    tweet = client.create_tweet(text=chunks[0])
+    last_id = tweet.data["id"]
+
+    for chunk in chunks[1:]:
+        tweet = client.create_tweet(text=chunk, in_reply_to_tweet_id=last_id)
+        last_id = tweet.data["id"]
+
+    print("✅ Tweeted thread successfully.")
+
+# ==== MAIN TWEET FUNCTION ====
 def tweet_weather():
     date_str = datetime.now().strftime("%d %b %Y")
-    tweet = f"Testing \n🌤️ Telangana Weather Forecast – {date_str}\n"
 
     telangana = build_zone_summary(ZONES)
     hyderabad = build_zone_summary(HYD_ZONES)
 
-    tweet += telangana if telangana else "\n✅ No major weather alerts in Telangana.\n"
-    if hyderabad:
-        tweet += "\n🏙️ Hyderabad Zones:\n" + hyderabad
+    summary_for_ai = f"""
+Weather forecast for Telangana on {date_str}:
 
-    if len(tweet) > 280:
-        tweet = tweet[:275] + "..."
+Telangana Zones:
+{telangana if telangana else 'No significant alerts in Telangana.'}
 
-    res = client.create_tweet(text=tweet)
-    print("✅ Tweeted successfully! Tweet ID:", res.data["id"])
+Hyderabad Zones:
+{hyderabad if hyderabad else 'No significant alerts in Hyderabad.'}
+"""
+
+    ai_tweet = generate_ai_tweet(summary_for_ai)
+
+    if not ai_tweet:
+        print("⚠️ GPT fallback. Posting basic tweet.")
+        ai_tweet = f"🌤️ Telangana Weather – {date_str}\n{summary_for_ai[:250]}..."
+
+    if len(ai_tweet) > 280:
+        post_tweet_thread(ai_tweet, client)
+    else:
+        res = client.create_tweet(text=ai_tweet)
+        print("✅ Tweeted successfully! Tweet ID:", res.data["id"])
 
 # ==== RUN ====
 if __name__ == "__main__":
