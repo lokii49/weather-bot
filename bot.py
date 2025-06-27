@@ -148,7 +148,7 @@ client = tweepy.Client(
 # ==== COMPOSE AND POST ====
 def tweet_weather():
     date_str = datetime.now().strftime("%d %b %Y")
-    tweet = f"🌤️ Telangana Weather Forecast – {date_str}\n"
+    tweet = f"Testing \n🌤️ Telangana Weather Forecast – {date_str}\n"
 
     telangana = build_zone_summary(ZONES)
     hyderabad = build_zone_summary(HYD_ZONES)
