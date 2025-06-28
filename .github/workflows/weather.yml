@@ -29,5 +29,5 @@ jobs:
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
           ACCESS_SECRET: ${{ secrets.ACCESS_SECRET }}
           BEARER_TOKEN: ${{ secrets.BEARER_TOKEN }}
-          OWM_API_KEY: ${{ secrets.OWM_API_KEY }}
+          WEATHERAPI_KEY: ${{ secrets.OWM_API_KEY }}
         run: python bot.py
