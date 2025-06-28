@@ -32,6 +32,8 @@ client = tweepy.Client(
     access_token=os.getenv("ACCESS_TOKEN"),
     access_token_secret=os.getenv("ACCESS_SECRET")
 )
+user = client.get_me()
+print("Authenticated as:", user.data.username)
 
 OWM_API_KEY = os.getenv("OWM_API_KEY")
 
