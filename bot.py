@@ -3,24 +3,12 @@ import requests
 import tweepy
 import cohere
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 
 load_dotenv()
-
 cohere_client = cohere.Client(os.getenv("COHERE_API_KEY"))
-OWM_API_KEY = os.getenv("OWM_API_KEY")
 
-# Twitter API
-client = tweepy.Client(
-    bearer_token=os.getenv("BEARER_TOKEN"),
-    consumer_key=os.getenv("API_KEY"),
-    consumer_secret=os.getenv("API_SECRET"),
-    access_token=os.getenv("ACCESS_TOKEN"),
-    access_token_secret=os.getenv("ACCESS_SECRET")
-)
-
-# Zones
 ZONES = {
     "North Telangana": ["Adilabad", "Nirmal", "Asifabad", "Mancherial", "Kamareddy"],
     "South Telangana": ["Mahabubnagar", "Gadwal", "Wanaparthy", "Nagarkurnool", "Narayanpet"],
@@ -37,40 +25,62 @@ HYD_ZONES = {
     "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
 }
 
+client = tweepy.Client(
+    bearer_token=os.getenv("BEARER_TOKEN"),
+    consumer_key=os.getenv("API_KEY"),
+    consumer_secret=os.getenv("API_SECRET"),
+    access_token=os.getenv("ACCESS_TOKEN"),
+    access_token_secret=os.getenv("ACCESS_SECRET")
+)
+
+OWM_API_KEY = os.getenv("OWM_API_KEY")
+
+BASE_FORECAST_URL = "https://api.openweathermap.org/data/2.5/onecall?lat={}&lon={}&exclude=minutely&appid={}&units=metric"
+BASE_CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather?q={}&appid={}&units=metric"
+
 def get_coordinates(city):
-    url = f"http://api.openweathermap.org/geo/1.0/direct"
-    params = {"q": city, "limit": 1, "appid": OWM_API_KEY}
     try:
-        response = requests.get(url, params=params, timeout=10).json()
-        if not response:
+        url = f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={OWM_API_KEY}"
+        r = requests.get(url, timeout=10).json()
+        if r:
+            print(f"📍 {city} coords: {r[0]['lat']}, {r[0]['lon']}")
+        else:
             print(f"⚠️ No coordinates found for {city}")
-            return None
-        return response[0]["lat"], response[0]["lon"]
+        return (r[0]["lat"], r[0]["lon"]) if r else None
     except Exception as e:
-        print(f"❌ Error getting coordinates for {city}:", e)
+        print(f"❌ Coordinate lookup failed for {city}:", e)
         return None
 
 def fetch_forecast(city):
     coords = get_coordinates(city)
     if not coords:
         return None
-    url = "https://api.openweathermap.org/data/2.5/forecast"
-    params = {
-        "lat": coords[0],
-        "lon": coords[1],
-        "appid": OWM_API_KEY,
-        "units": "metric"
-    }
     try:
-        response = requests.get(url, params=params, timeout=10)
+        url = BASE_FORECAST_URL.format(*coords, OWM_API_KEY)
+        response = requests.get(url, timeout=10)
         data = response.json()
-        if "list" not in data:
-            print(f"⚠️ No forecast list for {city}")
-            return None
-        return data
+        return data if "hourly" in data else None
     except Exception as e:
         print(f"❌ Error fetching forecast for {city}:", e)
         return None
+
+def fetch_current_weather(city):
+    try:
+        url = BASE_CURRENT_URL.format(city, OWM_API_KEY)
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        return data if response.status_code == 200 and "weather" in data else None
+    except Exception as e:
+        print(f"❌ Error fetching current weather for {city}:", e)
+        return None
+
+def summarize_current_weather(data):
+    if not data:
+        return None
+    desc = data["weather"][0]["description"].capitalize()
+    temp = data["main"]["temp"]
+    city = data["name"]
+    return f"{city}: {desc}, {temp}°C"
 
 def get_time_of_day(dt_unix):
     hour = datetime.fromtimestamp(dt_unix, pytz.timezone("Asia/Kolkata")).hour
@@ -83,25 +93,22 @@ def get_time_of_day(dt_unix):
     if 18 <= hour <= 20: return "evening"
     return "night"
 
-def is_significant_forecast(data):
+def is_significant_forecast(forecast):
+    if not forecast or "hourly" not in forecast:
+        return []
+
     alerts, seen = [], set()
-    now = datetime.utcnow()
-    cutoff = now + timedelta(hours=24)
+    for hour in forecast["hourly"][:24]:
+        temp = hour["temp"]
+        pop = hour.get("pop", 0)
+        desc = hour["weather"][0]["description"].lower()
+        time_phrase = get_time_of_day(hour["dt"])
 
-    for entry in data["list"]:
-        dt = datetime.utcfromtimestamp(entry["dt"])
-        if dt > cutoff:
-            break
-        temp = entry["main"]["temp"]
-        desc = entry["weather"][0]["description"].lower()
-        pop = entry.get("pop", 0)
-        time_phrase = get_time_of_day(entry["dt"])
-
-        if any(x in desc for x in ["rain", "drizzle", "shower", "thunderstorm", "mist"]) or pop >= 0.1:
+        if any(r in desc for r in ["rain", "drizzle", "showers", "thunderstorm", "mist"]) or pop >= 0.1:
             if "rain" not in seen:
                 alerts.append(f"🌧️ Rain in {time_phrase}")
                 seen.add("rain")
-        if temp >= 36 and "heat" not in seen:
+        if temp >= 40 and "heat" not in seen:
             alerts.append(f"🔥 Heat in {time_phrase}")
             seen.add("heat")
         if temp <= 20 and "cold" not in seen:
@@ -113,24 +120,27 @@ def prepare_zone_alerts(zones):
     zone_alerts = {}
     for zone, cities in zones.items():
         for city in cities:
-            data = fetch_forecast(city)
-            if not data:
+            forecast = fetch_forecast(city)
+            if not forecast:
                 continue
-            alerts = is_significant_forecast(data)
+            alerts = is_significant_forecast(forecast)
+            print(f"🔍 {zone} / {city}: alerts={alerts}")
             if alerts:
                 zone_alerts[zone] = alerts[0]
-                print(f"🔍 {zone} / {city}: {alerts[0]}")
                 break
     return zone_alerts
 
 def format_zone_summary(zone_alerts):
-    return "\n".join(f"{zone}: {alert}" for zone, alert in zone_alerts.items())
+    lines = []
+    for zone, alert in zone_alerts.items():
+        lines.append(f"{zone}: {alert}")
+    return "\n".join(lines)
 
-def generate_ai_tweets(summary_text, date_str, num_variants=3):
+def generate_ai_tweet(summary_text, date_str):
     prompt = f"""
-You're a friendly Indian weather bot. Based on the forecast summary below, write {num_variants} tweet variations.
+You're a friendly Indian weather bot. Based on the forecast summary below, write 1 tweet.
 
-Each tweet must:
+The tweet must:
 - Be under 280 characters
 - Start with a weather emoji headline like: "🌦️ Telangana Weather Update – {date_str}"
 - Include a few zones with bullet-point emojis like 📍 and a short weather alert (e.g., "📍 North Telangana: 🌧️ Rain in morning")
@@ -140,22 +150,20 @@ Each tweet must:
 Forecast summary:
 \"\"\"{summary_text}\"\"\"
 
-Tweets:
-1."""
+Tweet:
+"""
     try:
         response = cohere_client.generate(
             model="command-r-plus",
             prompt=prompt,
-            max_tokens=500,
-            temperature=0.7,
-            stop_sequences=["--"]
+            max_tokens=280,
+            temperature=0.7
         )
-        output = response.generations[0].text.strip()
-        tweets = [line.strip("1234567890. ").strip() for line in output.split("\n") if line.strip()]
-        return [t[:280] for t in tweets if t][:num_variants]
+        tweet = response.generations[0].text.strip()
+        return tweet[:280]
     except Exception as e:
         print("❌ Cohere error:", e)
-        return []
+        return None
 
 def tweet_weather():
     date_str = datetime.now().strftime("%d %b")
@@ -172,21 +180,25 @@ def tweet_weather():
         return
 
     summary_text = format_zone_summary(combined_alerts)
-    ai_tweets = generate_ai_tweets(summary_text, date_str)
 
-    if not ai_tweets:
-        print("⚠️ Failed to generate tweets.")
+    current_weather_data = fetch_current_weather("Hyderabad")
+    current_summary = summarize_current_weather(current_weather_data)
+
+    if current_summary:
+        summary_text = f"Current weather – {current_summary}\n\n" + summary_text
+
+    tweet = generate_ai_tweet(summary_text, date_str)
+    if not tweet:
+        print("⚠️ Failed to generate tweet.")
         return
 
-    for i, tweet in enumerate(ai_tweets):
-        try:
-            res = client.create_tweet(text=tweet)
-            print(f"✅ Tweet {i+1} posted! Tweet ID:", res.data["id"])
-        except tweepy.TooManyRequests:
-            print("❌ Rate limit hit.")
-            break
-        except Exception as e:
-            print(f"❌ Tweet {i+1} failed:", e)
+    try:
+        res = client.create_tweet(text=tweet)
+        print(f"✅ Tweet posted! Tweet ID:", res.data["id"])
+    except tweepy.TooManyRequests:
+        print("❌ Rate limit hit.")
+    except Exception as e:
+        print("❌ Tweet failed:", e)
 
 if __name__ == "__main__":
     tweet_weather()
