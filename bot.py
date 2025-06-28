@@ -144,60 +144,65 @@ def is_significant_forecast(forecast, aqi_data=None):
 
     for hour in forecast["hourly"][:24]:
         temp = hour["temp"]
-        feels_like = hour.get("feels_like", temp)
         humidity = hour.get("humidity", 0)
+        feels_like = hour.get("feels_like", temp)
         pop = hour.get("pop", 0)
         desc = hour["weather"][0]["description"].lower()
         time_phrase = get_time_of_day(hour["dt"])
 
+        print(f"🕒 {time_phrase}: temp={temp}, humidity={humidity}, feels_like={feels_like}, pop={pop}, desc='{desc}'")
+
+        # Rain
         if any(r in desc for r in ["rain", "drizzle", "showers", "thunderstorm", "mist", "light rain"]) or pop >= 0.05:
             if "rain" not in seen:
                 alerts.append(f"🌧️ Rain in {time_phrase}")
                 seen.add("rain")
 
+        # Heat
         if temp >= 38 and "heat" not in seen:
             alerts.append(f"🔥 Heat in {time_phrase}")
             seen.add("heat")
 
-        if temp >= 32 and humidity >= 70 and feels_like < 40 and "humid" not in seen:
+        # Humidity
+        if (
+            "heat" not in seen and "humid" not in seen and
+            temp >= 32 and humidity >= 70 and feels_like < 40
+        ):
             alerts.append(f"🌫️ Humid {time_phrase} with sticky air ({round(temp)}°C)")
             seen.add("humid")
 
+        # Cold
         if temp <= 20 and "cold" not in seen:
             alerts.append(f"❄️ Cold in {time_phrase}")
             seen.add("cold")
 
+        # Wind
         if hour.get("wind_speed", 0) >= 7 and "windy" not in seen:
             alerts.append(f"🌬️ Windy {time_phrase}, hold onto your hats!")
             seen.add("windy")
 
+        # Fog
         if hour.get("visibility", 10000) <= 2000 and "fog" not in seen:
             alerts.append(f"🌁 Fog expected {time_phrase}, drive safe!")
             seen.add("fog")
 
     if aqi_data:
         aqi = aqi_data.get("list", [{}])[0].get("main", {}).get("aqi", 1)
-        if aqi >= 3 and "pollution" not in seen:
-            aqi_level = classify_aqi_level(aqi)
-            alerts.append(f"{aqi_level} air quality – limit outdoor time")
+        if aqi >= 4 and "pollution" not in seen:
+            alerts.append("🟤 Poor air quality – limit outdoor time")
             seen.add("pollution")
 
+    print(f"⚠️ Final alerts: {alerts}")
     return alerts
 
 def prepare_zone_alerts(zones):
     zone_alerts = {}
     for zone, cities in zones.items():
         for city in cities:
-            forecast = fetch_forecast(city)
+            forecast, aqi_data = fetch_forecast(city)
             if not forecast:
                 continue
-
-            coords = get_coordinates(city)
-            if not coords:
-                continue
-
-            aqi_data = get_aqi(*coords, OWM_API_KEY)
-
+            
             alerts = is_significant_forecast(forecast, aqi_data=aqi_data)
             print(f"🔍 {zone} / {city}: alerts={alerts}")
             if alerts:
