@@ -43,29 +43,35 @@ def get_coordinates(city):
         url = f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={OWM_API_KEY}"
         r = requests.get(url, timeout=10).json()
         if r:
-            print(f"📍 {city} coords: {r[0]['lat']}, {r[0]['lon']}")
             return r[0]["lat"], r[0]["lon"]
-        else:
-            print(f"⚠️ No coordinates found for {city}")
-            return None
-    except Exception as e:
-        print(f"❌ Coordinate lookup failed for {city}:", e)
         return None
+    except:
+        return None
+
+def get_aqi(lat, lon, api_key):
+    try:
+        response = requests.get(
+            "https://api.openweathermap.org/data/2.5/air_pollution",
+            params={"lat": lat, "lon": lon, "appid": api_key}
+        )
+        if response.ok:
+            return response.json()
+    except:
+        pass
+    return None
 
 def fetch_forecast(city):
     coords = get_coordinates(city)
     if not coords:
-        return None
+        return None, None
+    lat, lon = coords
     try:
-        url = BASE_FORECAST_URL.format(*coords, OWM_API_KEY)
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if "hourly" in data:
-            print(f"✅ Forecast fetched for {city}")
-        return data
-    except Exception as e:
-        print(f"❌ Error fetching forecast for {city}:", e)
-        return None
+        url = BASE_FORECAST_URL.format(lat, lon, OWM_API_KEY)
+        forecast = requests.get(url, timeout=10).json()
+        aqi = get_aqi(lat, lon, OWM_API_KEY)
+        return forecast, aqi
+    except:
+        return None, None
 
 def fetch_current_weather(city):
     try:
@@ -73,12 +79,9 @@ def fetch_current_weather(city):
         response = requests.get(url, timeout=10)
         data = response.json()
         if response.status_code == 200 and "weather" in data:
-            print(f"✅ Current weather fetched for {city}")
             return data
-        print(f"⚠️ No current weather data for {city}")
         return None
-    except Exception as e:
-        print(f"❌ Error fetching current weather for {city}:", e)
+    except:
         return None
 
 def summarize_current_weather(data):
@@ -100,7 +103,7 @@ def get_time_of_day(dt_unix):
     if 18 <= hour <= 20: return "evening"
     return "night"
 
-def is_significant_forecast(forecast):
+def is_significant_forecast(forecast, aqi_data=None):
     if not forecast or "hourly" not in forecast:
         return []
 
@@ -109,27 +112,42 @@ def is_significant_forecast(forecast):
 
     for hour in forecast["hourly"][:24]:
         temp = hour["temp"]
+        feels_like = hour.get("feels_like", temp)
+        humidity = hour.get("humidity", 0)
         pop = hour.get("pop", 0)
         desc = hour["weather"][0]["description"].lower()
         time_phrase = get_time_of_day(hour["dt"])
 
-        # 🟦 Rain detection (more sensitive):
-        if any(r in desc for r in [
-                "rain", "drizzle", "showers", "thunderstorm", "mist", "light rain"
-            ]) or pop >= 0.05:
+        if any(r in desc for r in ["rain", "drizzle", "showers", "thunderstorm", "mist", "light rain"]) or pop >= 0.05:
             if "rain" not in seen:
                 alerts.append(f"🌧️ Rain in {time_phrase}")
                 seen.add("rain")
 
-        # 🔴 Heat alert:
-        if temp >= 40 and "heat" not in seen:
+        if temp >= 38 and "heat" not in seen:
             alerts.append(f"🔥 Heat in {time_phrase}")
             seen.add("heat")
 
-        # ❄️ Cold alert:
+        if temp >= 32 and humidity >= 70 and feels_like < 40 and "humid" not in seen:
+            alerts.append(f"🌫️ Humid {time_phrase} with sticky air ({round(temp)}°C)")
+            seen.add("humid")
+
         if temp <= 20 and "cold" not in seen:
             alerts.append(f"❄️ Cold in {time_phrase}")
             seen.add("cold")
+
+        if hour.get("wind_speed", 0) >= 7 and "windy" not in seen:
+            alerts.append(f"🌬️ Windy {time_phrase}, hold onto your hats!")
+            seen.add("windy")
+
+        if hour.get("visibility", 10000) <= 2000 and "fog" not in seen:
+            alerts.append(f"🌁 Fog expected {time_phrase}, drive safe!")
+            seen.add("fog")
+
+    if aqi_data:
+        aqi = aqi_data.get("list", [{}])[0].get("main", {}).get("aqi", 1)
+        if aqi >= 4 and "pollution" not in seen:
+            alerts.append("🟤 Poor air quality – limit outdoor time")
+            seen.add("pollution")
 
     return alerts
 
@@ -140,7 +158,14 @@ def prepare_zone_alerts(zones):
             forecast = fetch_forecast(city)
             if not forecast:
                 continue
-            alerts = is_significant_forecast(forecast)
+
+            coords = get_coordinates(city)
+            if not coords:
+                continue
+
+            aqi_data = get_aqi(*coords, OWM_API_KEY)
+
+            alerts = is_significant_forecast(forecast, aqi_data=aqi_data)
             print(f"🔍 {zone} / {city}: alerts={alerts}")
             if alerts:
                 zone_alerts[zone] = alerts[0]
@@ -150,8 +175,6 @@ def prepare_zone_alerts(zones):
 def format_zone_summary(zone_alerts):
     lines = []
     for zone, alert in zone_alerts.items():
-        short_zone = zone.replace("Telangana", "").replace("Hyderabad", "").strip()
-        name = short_zone or zone
         lines.append(f"{zone}: {alert}")
     return "\n".join(lines)
 
@@ -161,9 +184,9 @@ You're a friendly Indian weather bot. Based on the forecast summary below, write
 
 Tweet requirements:
 - Under 280 characters
-- Start with emoji headline like: "🌦️ Telangana Weather Update – {date_str}"
-- Include a few zones with 📍 and short alerts (e.g., "📍 North Telangana: 🌧️ Rain in morning")
-- End with a friendly tip like "Stay safe!" or "Carry an umbrella! ☂️"
+- Start with emoji headline like: \"\ud83c\udf26\ufe0f Telangana Weather Update – {date_str}\"
+- Include a few zones with \ud83d\udccd and short alerts (e.g., \"\ud83d\udccd North Telangana: \ud83c\udf27\ufe0f Rain in morning\")
+- End with a friendly tip like \"Stay safe!\" or \"Carry an umbrella! \u2612\ufe0f\"
 - No hashtags
 
 Forecast summary:
@@ -179,10 +202,8 @@ Tweet:
             temperature=0.7,
             stop_sequences=["--"]
         )
-        tweet = response.generations[0].text.strip()
-        return tweet[:280]
-    except Exception as e:
-        print("❌ Cohere error:", e)
+        return response.generations[0].text.strip()[:280]
+    except:
         return None
 
 def generate_pleasant_weather_tweet(date_str, current_weather=None):
@@ -190,9 +211,9 @@ def generate_pleasant_weather_tweet(date_str, current_weather=None):
 You're a friendly Indian weather bot. Today’s weather in Telangana is calm.
 
 Write 1 cheerful tweet:
-- Start with emoji headline: “🌤️ Telangana Weather Update – {date_str}”
+- Start with emoji headline: “🌤️ Weather Update – {date_str}”
 - Mention no major events expected
-- Optionally include: "{current_weather}"
+- Optionally include: \"{current_weather}\"
 - End with a warm sign-off like “Enjoy your day!”
 
 Tweet:
@@ -206,8 +227,7 @@ Tweet:
             stop_sequences=["--"]
         )
         return response.generations[0].text.strip()[:280]
-    except Exception as e:
-        print("❌ Cohere error (pleasant):", e)
+    except:
         return None
 
 def tweet_weather():
