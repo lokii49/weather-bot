@@ -103,6 +103,38 @@ def get_time_of_day(dt_unix):
     if 18 <= hour <= 20: return "evening"
     return "night"
 
+def classify_aqi_level(aqi):
+    levels = {
+        1: "🟢 Good",
+        2: "🟡 Fair",
+        3: "🟠 Moderate",
+        4: "🟤 Poor",
+        5: "🔴 Very Poor"
+    }
+    return levels.get(aqi, "⚪ Unknown")
+
+def get_worst_aqi_city(cities):
+    worst_city = None
+    worst_aqi = -1
+    worst_level = ""
+
+    for city in cities:
+        coords = get_coordinates(city)
+        if not coords:
+            continue
+        aqi_data = get_aqi(*coords, OWM_API_KEY)
+        if not aqi_data:
+            continue
+        aqi = aqi_data.get("list", [{}])[0].get("main", {}).get("aqi", 1)
+        if aqi > worst_aqi:
+            worst_city = city
+            worst_aqi = aqi
+            worst_level = classify_aqi_level(aqi)
+
+    if worst_city and worst_aqi >= 3:
+        return f"{worst_city}: {worst_level} air quality"
+    return None
+
 def is_significant_forecast(forecast, aqi_data=None):
     if not forecast or "hourly" not in forecast:
         return []
@@ -145,8 +177,9 @@ def is_significant_forecast(forecast, aqi_data=None):
 
     if aqi_data:
         aqi = aqi_data.get("list", [{}])[0].get("main", {}).get("aqi", 1)
-        if aqi >= 4 and "pollution" not in seen:
-            alerts.append("🟤 Poor air quality – limit outdoor time")
+        if aqi >= 3 and "pollution" not in seen:
+            aqi_level = classify_aqi_level(aqi)
+            alerts.append(f"{aqi_level} air quality – limit outdoor time")
             seen.add("pollution")
 
     return alerts
@@ -247,6 +280,12 @@ def tweet_weather():
         summary_text = format_zone_summary(combined_alerts)
         if current_summary:
             summary_text = f"Current weather – {current_summary}\n\n" + summary_text
+
+        # 🔴 Include worst AQI info (optional, only if AQI ≥ 3)
+        all_cities = sum(ZONES.values(), []) + sum(HYD_ZONES.values(), [])
+        worst_aqi_info = get_worst_aqi_city(all_cities)
+        if worst_aqi_info:
+            summary_text += f"\n\n🟤 AQI Alert: {worst_aqi_info}"
 
         tweet_text = generate_ai_tweet(summary_text, date_str)
         if tweet_text:
