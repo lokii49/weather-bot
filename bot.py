@@ -63,14 +63,17 @@ def get_aqi(lat, lon, api_key):
 def fetch_forecast(city):
     coords = get_coordinates(city)
     if not coords:
+        print(f"❌ Could not get coordinates for {city}")
         return None, None
     lat, lon = coords
     try:
+        print(f"🌐 Fetching forecast for {city} at ({lat}, {lon})")
         url = BASE_FORECAST_URL.format(lat, lon, OWM_API_KEY)
         forecast = requests.get(url, timeout=10).json()
         aqi = get_aqi(lat, lon, OWM_API_KEY)
         return forecast, aqi
-    except:
+    except Exception as e:
+        print(f"❌ Error fetching forecast for {city}: {e}")
         return None, None
 
 def fetch_current_weather(city):
@@ -201,13 +204,16 @@ def prepare_zone_alerts(zones):
         for city in cities:
             forecast, aqi_data = fetch_forecast(city)
             if not forecast:
+                print(f"⚠️ Skipping {city} – no forecast data.")
                 continue
-            
+
+            print(f"✅ Forecast keys for {city}: {list(forecast.keys())}")
             alerts = is_significant_forecast(forecast, aqi_data=aqi_data)
+
             print(f"🔍 {zone} / {city}: alerts={alerts}")
             if alerts:
                 zone_alerts[zone] = alerts[0]
-                break
+                break  # Only one alert per zone
     return zone_alerts
 
 def format_zone_summary(zone_alerts):
