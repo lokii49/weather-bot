@@ -288,53 +288,56 @@ def tweet_weather():
     current_summary = summarize_current_weather(current_weather_data)
 
     summary_text = ""
+    tweet_text = ""
+
+    # Always calculate AQI info, regardless of alert status
+    all_cities = sum(ZONES.values(), []) + sum(HYD_ZONES.values(), [])
+    worst_aqi_info = get_worst_aqi_city(all_cities)
 
     if combined_alerts:
         summary_text = format_zone_summary(combined_alerts)
         if current_summary:
             summary_text = f"Current weather – {current_summary}\n\n" + summary_text
-
-        # Optional: include AQI alert if bad
-        all_cities = sum(ZONES.values(), []) + sum(HYD_ZONES.values(), [])
-        worst_aqi_info = get_worst_aqi_city(all_cities)
         if worst_aqi_info:
             summary_text += f"\n\n🟤 AQI Alert: {worst_aqi_info}"
 
         tweet_text = generate_ai_tweet(summary_text, date_str)
-
-        try:
-            if tweet_text:
+        if tweet_text:
+            try:
                 res = client.create_tweet(text=tweet_text)
                 print("✅ Weather alert tweet posted! Tweet ID:", res.data["id"])
-            else:
-                print("❌ Failed to generate weather alert tweet.")
-        except tweepy.TooManyRequests:
-            print("❌ Rate limit hit while tweeting weather alert.")
-        except Exception as e:
-            print("❌ Error tweeting weather alert:", e)
-        finally:
-            print("\n📄 Final Weather Summary:\n" + summary_text)
-
+            except tweepy.TooManyRequests:
+                print("❌ Rate limit hit.")
+            except Exception as e:
+                print("❌ Error tweeting:", e)
+        else:
+            print("❌ Failed to generate weather alert tweet.")
     else:
         print("ℹ️ No alerts found – tweeting a pleasant weather update.")
-        tweet_text = generate_pleasant_weather_tweet(date_str, current_summary)
 
-        try:
-            if tweet_text:
+        tweet_text = generate_pleasant_weather_tweet(date_str, current_summary)
+        
+        # Append AQI info to pleasant tweet
+        if tweet_text and worst_aqi_info:
+            tweet_text += f"\n\n🟤 AQI Alert: {worst_aqi_info}"
+
+        if tweet_text:
+            try:
                 res = client.create_tweet(text=tweet_text)
                 print("✅ Pleasant weather tweet posted! Tweet ID:", res.data["id"])
-            else:
-                print("❌ Failed to generate pleasant weather tweet.")
-        except tweepy.TooManyRequests:
-            print("❌ Rate limit hit while tweeting pleasant weather.")
-        except Exception as e:
-            print("❌ Error tweeting pleasant weather:", e)
-        finally:
-            print("\n📄 Final Weather Summary:")
-            if tweet_text:
-                print(tweet_text)
-            else:
-                print("No summary available.")
-                
+            except tweepy.TooManyRequests:
+                print("❌ Rate limit hit while tweeting pleasant weather.")
+            except Exception as e:
+                print("❌ Error tweeting pleasant weather:", e)
+        else:
+            print("❌ Failed to generate pleasant weather tweet.")
+
+    # Always show summary in console
+    print("\n📄 Final Weather Summary:")
+    if tweet_text:
+        print(tweet_text)
+    else:
+        print("No summary available.")
+        
 if __name__ == "__main__":
     tweet_weather()
