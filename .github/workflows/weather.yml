@@ -2,7 +2,8 @@ name: Daily Weather Tweet
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+     - cron: '0 2 * * *'   # 7:30 AM IST
+     - cron: '30 12 * * *' # 6:00 PM IST (not 5:30 PM)
   workflow_dispatch:
 
 jobs:
