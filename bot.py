@@ -343,7 +343,7 @@ def tweet_weather():
         
         # Append AQI info to pleasant tweet
         if tweet_text and worst_aqi_info:
-            tweet_text += f"\n\n🟤 AQI Alert: {worst_aqi_info}"
+            tweet_text += f"\n\nTesting 🟤 AQI Alert: {worst_aqi_info}"
 
         if tweet_text:
             try:
