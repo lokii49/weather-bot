@@ -155,13 +155,12 @@ def is_significant_forecast(forecast, aqi_data=None):
 
         print(f"🕒 {time_phrase}: temp={temp}, humidity={humidity}, feels_like={feels_like}, pop={pop}, desc='{desc}'")
 
-       # Rain (more sensitive)
-       rain_keywords = ["rain", "drizzle", "showers", "thunderstorm", "mist", "light rain", "scattered", "sprinkles"]
-
-       if any(r in desc for r in rain_keywords) or pop >= 0.02:
-          if "rain" not in seen:
-             alerts.append(f"🌦️ Light rain expected {time_phrase}")
-             seen.add("rain")
+        # Rain (more sensitive)
+        rain_keywords = ["rain", "drizzle", "showers", "thunderstorm", "mist", "light rain", "scattered", "sprinkles"]
+        if any(r in desc for r in rain_keywords) or pop >= 0.02:
+            if "rain" not in seen:
+                alerts.append(f"🌦️ Light rain expected {time_phrase}")
+                seen.add("rain")
 
         # Heat
         if temp >= 38 and "heat" not in seen:
@@ -191,6 +190,7 @@ def is_significant_forecast(forecast, aqi_data=None):
             alerts.append(f"🌁 Fog expected {time_phrase}, drive safe!")
             seen.add("fog")
 
+    # AQI
     if aqi_data:
         aqi = aqi_data.get("list", [{}])[0].get("main", {}).get("aqi", 1)
         if aqi >= 4 and "pollution" not in seen:
