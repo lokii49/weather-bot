@@ -43,13 +43,33 @@ BASE_CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather?q={}&appid={
 def get_coordinates(city):
     try:
         url = f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={OWM_API_KEY}"
-        r = requests.get(url, timeout=10).json()
+        response = requests.get(url, timeout=10)
+        
+        # Handle 403 or other HTTP errors
+        if response.status_code == 403:
+            raise Exception("403 Forbidden from geocoding API")
+
+        r = response.json()
         if r:
             return r[0]["lat"], r[0]["lon"]
-        return None
-    except:
-        return None
 
+    except Exception as e:
+        print(f"⚠️ Geocoding failed for {city}: {e}")
+
+    # Fallback for "Suchitra" – feel free to add more
+    fallback_coords = {
+        "Suchitra": (17.4966, 78.4475),
+        "Hyderabad": (17.385044, 78.486671),
+        "Secunderabad": (17.4399, 78.4983),
+    }
+    
+    for key in fallback_coords:
+        if key.lower() in city.lower():
+            print(f"🧭 Using fallback coordinates for {city}: {fallback_coords[key]}")
+            return fallback_coords[key]
+
+    return None
+    
 def get_aqi(lat, lon, api_key):
     try:
         response = requests.get(
