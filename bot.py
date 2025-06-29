@@ -235,6 +235,8 @@ def detect_urgent_alerts(zones):
 
                 if "thunder" in text or rain > 10:
                     urgent_alerts[zone] = "⛈️ Heavy rain expected soon"
+                elif 0.1 <= rain <= 2:
+                    urgent_alerts[zone] = "🌦️ Light drizzle expected"
                 elif temp >= 42:
                     urgent_alerts[zone] = "🔥 Heatwave alert"
                 elif temp <= 10:
