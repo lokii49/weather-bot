@@ -72,20 +72,34 @@ def classify_aqi_level(aqi):
         return levels[aqi - 1]
     return "⚪ Unknown"
 
-def extract_alerts(data):
+def extract_alerts(data, start_hour=6, end_hour=18):
     alerts = []
     forecast_hours = data.get("forecast", {}).get("forecastday", [{}])[0].get("hour", [])
     seen = set()
 
+    relevant_hours = []
+
     for hour in forecast_hours:
+        time_str = hour.get("time", "")
+        hour_dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+        hour_only = hour_dt.hour
+
+        # Handle both normal and cross-midnight ranges
+        if start_hour <= end_hour:
+            if start_hour <= hour_only < end_hour:
+                relevant_hours.append((hour_dt, hour))
+        else:
+            if hour_only >= start_hour or hour_only < end_hour:
+                relevant_hours.append((hour_dt, hour))
+
+    for hour_dt, hour in relevant_hours:
         temp = hour.get("temp_c", 0)
         humidity = hour.get("humidity", 0)
         condition = hour.get("condition", {}).get("text", "").lower()
         precip_mm = hour.get("precip_mm", 0)
         wind_kph = hour.get("wind_kph", 0)
         visibility_km = hour.get("vis_km", 10)
-        time_str = hour.get("time", "")
-        hour_dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+
         hour_text = hour_dt.strftime("%I %p").lstrip("0")
 
         if any(r in condition for r in ["rain", "drizzle", "showers", "thunder"]):
@@ -108,8 +122,9 @@ def extract_alerts(data):
             alerts.append(f"🌁 Fog expected {hour_text}")
             seen.add("fog")
 
-    aqi = data.get("current", {}).get("air_quality", {}).get("pm2_5", 0)
-    if aqi >= 60 and "pollution" not in seen:
+    # AQI is from 'current' section, not hourly
+    aqi_pm25 = data.get("current", {}).get("air_quality", {}).get("pm2_5", 0)
+    if aqi_pm25 >= 60 and "pollution" not in seen:
         alerts.append("🟤 Poor air quality – limit outdoor time")
         seen.add("pollution")
 
