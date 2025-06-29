@@ -2,8 +2,9 @@ name: Daily Weather Tweet
 
 on:
   schedule:
-     - cron: '0 1 * * *'   # 6:30 AM IST
-     - cron: '30 12 * * *' # 6:00 PM IST (not 5:30 PM)
+    - cron: '0 1 * * *'      # 6:30 AM IST
+    - cron: '30 12 * * *'    # 6:00 PM IST
+    - cron: '*/30 * * * *'   # Every 30 minutes
   workflow_dispatch:
 
 jobs:
