@@ -116,7 +116,7 @@ def fetch_weatherapi_forecast(city):
     try:
         params = {
             "key": WEATHERAPI_KEY,
-            "q": city,
+            "q": f"{city}, Telangana, India",
             "days": 1,
             "aqi": "yes",
             "alerts": "yes"
