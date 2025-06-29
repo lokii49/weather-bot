@@ -6,7 +6,7 @@ import json
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import pytz
-from github import Github
+from github import Github, InputFileContent
 GIST_FILE = "last_alert.json"
 
 load_dotenv()
@@ -93,17 +93,54 @@ def load_last_alert_from_gist():
         print("❌ Gist load error:", e)
     return {}
 
+def create_new_gist(data):
+    token = os.getenv("GIST_TOKEN")
+    if not token:
+        print("❌ Missing GIST_TOKEN")
+        return None
+    g = Github(token)
+    try:
+        gist = g.get_user().create_gist(
+            public=False,
+            files={GIST_FILE: InputFileContent(content=json.dumps(data))},
+            description="Weather alert status storage"
+        )
+        print("✅ New Gist created with ID:", gist.id)
+        return gist.id
+    except Exception as e:
+        print("❌ Failed to create new Gist:", e)
+        return None
+
 def save_last_alert_to_gist(data):
     token = os.getenv("GIST_TOKEN")
     gist_id = os.getenv("GIST_ID")
-    if not token or not gist_id:
+    if not token:
+        print("❌ Missing GIST_TOKEN")
         return
+
     g = Github(token)
     try:
-        gist = g.get_gist(gist_id)
-        gist.edit(files={GIST_FILE: {"content": json.dumps(data)}})
+        if gist_id:
+            gist = g.get_gist(gist_id)
+            # Update or create the file within existing gist
+            if GIST_FILE in gist.files:
+                gist.edit(files={GIST_FILE: InputFileContent(content=json.dumps(data))})
+                print(f"✅ Gist file '{GIST_FILE}' updated.")
+            else:
+                new_files = {**gist.files, GIST_FILE: InputFileContent(content=json.dumps(data))}
+                gist.edit(files=new_files)
+                print(f"✅ Gist file '{GIST_FILE}' created in gist.")
+        else:
+            # GIST_ID not set, fallback to creating new gist
+            new_id = create_new_gist(data)
+            if new_id:
+                print(f"📝 Please update your .env with GIST_ID={new_id}")
     except Exception as e:
         print("❌ Gist save error:", e)
+        # Optional: Try creating a new Gist on failure
+        new_id = create_new_gist(data)
+        if new_id:
+            print(f"📝 Please update your .env with GIST_ID={new_id}")
 
 def get_tone_of_day(dt=None):
     TONES = list(TONE_TEMPLATES.keys())  # ["witty", "friendly", "alert", "telugu"]
