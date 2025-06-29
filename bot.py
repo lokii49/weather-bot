@@ -76,7 +76,6 @@ def extract_alerts(data, start_hour=6, end_hour=18):
     alerts = []
     forecast_hours = data.get("forecast", {}).get("forecastday", [{}])[0].get("hour", [])
     seen = set()
-
     relevant_hours = []
 
     for hour in forecast_hours:
@@ -84,45 +83,55 @@ def extract_alerts(data, start_hour=6, end_hour=18):
         hour_dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M")
         hour_only = hour_dt.hour
 
-        # Handle both normal and cross-midnight ranges
         if start_hour <= end_hour:
             if start_hour <= hour_only < end_hour:
                 relevant_hours.append((hour_dt, hour))
-        else:
+        else:  # e.g., 6 PM – 6 AM
             if hour_only >= start_hour or hour_only < end_hour:
                 relevant_hours.append((hour_dt, hour))
 
+    # Define alert rules
+    ALERT_RULES = [
+        {
+            "id": "rain",
+            "check": lambda h: any(w in h.get("condition", {}).get("text", "").lower() for w in ["rain", "drizzle", "showers", "thunder"]),
+            "message": lambda t: f"🌧️ Rain expected around {t}"
+        },
+        {
+            "id": "heat",
+            "check": lambda h: h.get("temp_c", 0) >= 38,
+            "message": lambda t: f"🔥 High heat around {t}"
+        },
+        {
+            "id": "cold",
+            "check": lambda h: h.get("temp_c", 0) <= 20,
+            "message": lambda t: f"❄️ Cold weather around {t}"
+        },
+        {
+            "id": "humid",
+            "check": lambda h: h.get("humidity", 0) >= 70,
+            "message": lambda t: f"🌫️ Humid air around {t}"
+        },
+        {
+            "id": "windy",
+            "check": lambda h: h.get("wind_kph", 0) >= 25,
+            "message": lambda t: f"💨 Windy conditions around {t}"
+        },
+        {
+            "id": "fog",
+            "check": lambda h: h.get("vis_km", 10) < 2,
+            "message": lambda t: f"🌁 Fog expected around {t}"
+        },
+    ]
+
     for hour_dt, hour in relevant_hours:
-        temp = hour.get("temp_c", 0)
-        humidity = hour.get("humidity", 0)
-        condition = hour.get("condition", {}).get("text", "").lower()
-        precip_mm = hour.get("precip_mm", 0)
-        wind_kph = hour.get("wind_kph", 0)
-        visibility_km = hour.get("vis_km", 10)
-
         hour_text = hour_dt.strftime("%I %p").lstrip("0")
+        for rule in ALERT_RULES:
+            if rule["id"] not in seen and rule["check"](hour):
+                alerts.append(rule["message"](hour_text))
+                seen.add(rule["id"])
 
-        if any(r in condition for r in ["rain", "drizzle", "showers", "thunder"]):
-            if "rain" not in seen:
-                alerts.append(f"🌧️ Rain expected around {hour_text}")
-                seen.add("rain")
-        if temp >= 38 and "heat" not in seen:
-            alerts.append(f"🔥 High heat around {hour_text}")
-            seen.add("heat")
-        if temp <= 20 and "cold" not in seen:
-            alerts.append(f"❄️ Cold weather around {hour_text}")
-            seen.add("cold")
-        if humidity >= 70 and "humid" not in seen:
-            alerts.append(f"🌫️ Humid air around {hour_text}")
-            seen.add("humid")
-        if wind_kph >= 25 and "windy" not in seen:
-            alerts.append(f"💨 Windy conditions around {hour_text}")
-            seen.add("windy")
-        if visibility_km < 2 and "fog" not in seen:
-            alerts.append(f"🌁 Fog expected {hour_text}")
-            seen.add("fog")
-
-    # AQI is from 'current' section, not hourly
+    # Handle AQI (outside hourly loop)
     aqi_pm25 = data.get("current", {}).get("air_quality", {}).get("pm2_5", 0)
     if aqi_pm25 >= 60 and "pollution" not in seen:
         alerts.append("🟤 Poor air quality – limit outdoor time")
@@ -197,10 +206,18 @@ def tweet_weather():
     tg_alerts = get_zone_alerts(ZONES, start_hour, end_hour)
     hyd_alerts = get_zone_alerts(HYD_ZONES, start_hour, end_hour)
 
+    # Combine Telangana + Hyderabad zone alerts
     combined_alerts = {**tg_alerts}
-    if hyd_alerts:
-        combined_alerts["Hyderabad"] = next(iter(hyd_alerts.values()), None)
 
+    # Add each Hyderabad sub-zone (like "North Hyderabad", "West Hyderabad", etc.)
+    for zone, alert in hyd_alerts.items():
+        combined_alerts[zone] = alert
+
+    # Optional: Include a general "Hyderabad" alert (first alert from hyd_alerts)
+    if hyd_alerts:
+        combined_alerts["Hyderabad"] = next(iter(hyd_alerts.values()))
+
+    # Format and generate tweet
     summary_text = format_zone_summary(combined_alerts)
     tweet_text = generate_ai_tweet(summary_text, date_str)
 
