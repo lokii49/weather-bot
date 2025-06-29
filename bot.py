@@ -5,11 +5,9 @@ import cohere
 from dotenv import load_dotenv
 from datetime import datetime
 import pytz
-import random
 
 load_dotenv()
 cohere_client = cohere.Client(os.getenv("COHERE_API_KEY"))
-
 WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
 
 ZONES = {
@@ -38,6 +36,52 @@ client = tweepy.Client(
 user = client.get_me()
 print("Authenticated as:", user.data.username)
 
+TONE_TEMPLATES = {
+    "witty": """
+You are a witty Hyderabad local who loves puns.
+Write ONE tweet (<280 chars) about the forecast below.
+
+Rules:
+- Start with a playful headline, e.g. “Rain, rain, go a‑Hydera‑way ☔ – {date}”
+- Mention 2‑4 zone alerts using 📍
+- Light humour or wordplay is welcome
+- End with a cheeky sign‑off (e.g., “Chai‑me for updates! ☕”)
+""",
+
+    "friendly": """
+You’re a friendly Indian neighbour sharing today’s weather.
+Tweet requirements:
+- Warm greeting + date, e.g. “Morning folks!  {date}”
+- 2‑4 zone alerts with 📍
+- Simple emojis allowed
+- End with a caring tip ( “Stay hydrated!” etc.)
+""",
+
+    "alert": """
+Adopt a crisp, alert‑style tone (like emergency services).
+Tweet rules:
+- Headline: “⚠️ Weather Alert – {date}”
+- Bullet‑like zone alerts (📍)
+- No humour, be direct
+- Finish with a safety CTA (“Travel only if needed.”)
+""",
+
+    "telugu": """
+Switch to a casual Telugu‑English mix (“Teluglish”).
+Tweet rules:
+- Open with a Telugu greeting + date, e.g. “శుభోదయం! {date}”
+- Zone alerts with 📍; include at least one Telugu phrase (“వర్షం వస్తోంది!” etc.)
+- End with a friendly Telugu sign‑off (“జాగ్రత్త!”)
+"""
+}
+
+def get_tone_of_day(dt=None):
+    TONES = list(TONE_TEMPLATES.keys())  # ["witty", "friendly", "alert", "telugu"]
+    if dt is None:
+        dt = datetime.now(pytz.timezone("Asia/Kolkata"))
+    day_number = int(dt.strftime("%j"))
+    return TONES[day_number % len(TONES)]
+
 def fetch_weatherapi_forecast(city):
     try:
         params = {
@@ -56,16 +100,6 @@ def fetch_weatherapi_forecast(city):
     except Exception as e:
         print(f"❌ Exception fetching forecast for {city}: {e}")
         return None
-
-def summarize_weather_data(data):
-    if not data:
-        return None
-
-    current = data["current"]
-    location = data["location"]["name"]
-    condition = current["condition"]["text"]
-    temp_c = current["temp_c"]
-    return f"{location}: {condition}, {temp_c}°C"
 
 def classify_aqi_level(aqi):
     levels = ["🟢 Good", "🟡 Fair", "🟠 Moderate", "🟤 Poor", "🔴 Very Poor"]
@@ -87,11 +121,10 @@ def extract_alerts(data, start_hour=6, end_hour=18):
         if start_hour <= end_hour:
             if start_hour <= hour_only < end_hour:
                 relevant_hours.append((hour_dt, hour))
-        else:  # e.g., 6 PM – 6 AM
+        else:
             if hour_only >= start_hour or hour_only < end_hour:
                 relevant_hours.append((hour_dt, hour))
 
-    # Define alert rules
     ALERT_RULES = [
         {
             "id": "rain",
@@ -132,7 +165,6 @@ def extract_alerts(data, start_hour=6, end_hour=18):
                 alerts.append(rule["message"](hour_text))
                 seen.add(rule["id"])
 
-    # Handle AQI (outside hourly loop)
     aqi_pm25 = data.get("current", {}).get("air_quality", {}).get("pm2_5", 0)
     if aqi_pm25 >= 60 and "pollution" not in seen:
         alerts.append("🟤 Poor air quality – limit outdoor time")
@@ -154,50 +186,20 @@ def get_zone_alerts(zones, start_hour, end_hour):
     return zone_alerts
 
 def format_zone_summary(zone_alerts):
-    lines = []
-    for zone, alert in zone_alerts.items():
-        lines.append(f"📍 {zone}: {alert}")
-    return "\n".join(lines)
+    return "\n".join(f"📍 {zone}: {alert}" for zone, alert in zone_alerts.items())
 
-def generate_ai_tweet(summary_text, date_str):
-    styles = [
-        f"""
-You're a friendly Indian weather bot. Based on the forecast summary below, write a concise tweet.
+def generate_ai_tweet(summary_text, date_str, tone=None):
+    if not tone:
+        tone = get_tone_of_day()
+    prompt_template = TONE_TEMPLATES[tone].format(date=date_str).strip()
 
-Requirements:
-- Start with something like "🌦️ Telangana Weather – {date_str}" or "Weather today ☁️ – {date_str}"
-- Use casual tone, can include emojis like ☁️ 🌧️ 🔥 💨
-- Include 2–4 zones with alerts like: "📍 East Telangana: Rain at 8 AM"
-- End with a friendly tip or local phrase (e.g., "Stay cool 😎", "Umbrella might help ☂️")
-""",
-        f"""
-Act like a cheerful Hyderabad local sharing today's weather.
-
-Tweet should:
-- Start with something fun like: "Morning update! 🌄" or "Heads up, folks! 🌧️"
-- Mention weather in different Telangana zones briefly
-- Use local tone, mix emojis, slight humor okay
-- Be under 280 characters
-- End with a tip like "Avoid travel post noon!" or "Best to wrap up early"
-""",
-        f"""
-You're a smart weather assistant. Write a tweet summary for Telangana on {date_str}.
-
-Include:
-- 2–3 zone alerts in bullet/emoji format
-- Avoid being too formal
-- Add a short reminder: “Don’t forget your water bottle!” or “Air quality’s poor, stay in if you can.”
-""",
-    ]
-
-    prompt = random.choice(styles).strip() + f"\n\nForecast summary:\n{summary_text}\n\nTweet:"
-    
+    prompt = f"{prompt_template}\n\nForecast summary:\n{summary_text}\n\nTweet:"
     try:
         response = cohere_client.generate(
             model="command-r-plus",
             prompt=prompt,
             max_tokens=280,
-            temperature=0.9,  # slightly higher for creativity
+            temperature=0.9 if tone in ["witty", "telugu"] else 0.7,
             stop_sequences=["--"]
         )
         return response.generations[0].text.strip()[:280]
@@ -210,34 +212,22 @@ def tweet_weather():
     now = datetime.now(IST)
     date_str = now.strftime("%d %b")
 
-    # Determine time window
     if 5 <= now.hour < 12:
-        # Morning tweet: 6 AM – 6 PM
-        start_hour = 6
-        end_hour = 18
+        start_hour, end_hour = 6, 18
     else:
-        # Evening tweet: 6 PM – 6 AM
-        start_hour = 18
-        end_hour = 6
+        start_hour, end_hour = 18, 6
 
-    # Get weather alerts based on time window
     tg_alerts = get_zone_alerts(ZONES, start_hour, end_hour)
     hyd_alerts = get_zone_alerts(HYD_ZONES, start_hour, end_hour)
 
-    # Combine Telangana + Hyderabad zone alerts
-    combined_alerts = {**tg_alerts}
-
-    # Add each Hyderabad sub-zone (like "North Hyderabad", "West Hyderabad", etc.)
-    for zone, alert in hyd_alerts.items():
-        combined_alerts[zone] = alert
-
-    # Optional: Include a general "Hyderabad" alert (first alert from hyd_alerts)
+    combined_alerts = {**tg_alerts, **hyd_alerts}
     if hyd_alerts:
         combined_alerts["Hyderabad"] = next(iter(hyd_alerts.values()))
 
-    # Format and generate tweet
     summary_text = format_zone_summary(combined_alerts)
-    tweet_text = generate_ai_tweet(summary_text, date_str)
+
+    tone_override = os.getenv("FORCE_TONE")  # optional manual override
+    tweet_text = generate_ai_tweet(summary_text, date_str, tone=tone_override)
 
     if tweet_text:
         try:
