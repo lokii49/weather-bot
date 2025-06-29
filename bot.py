@@ -5,6 +5,7 @@ import cohere
 from dotenv import load_dotenv
 from datetime import datetime
 import pytz
+import random
 
 load_dotenv()
 cohere_client = cohere.Client(os.getenv("COHERE_API_KEY"))
@@ -159,32 +160,49 @@ def format_zone_summary(zone_alerts):
     return "\n".join(lines)
 
 def generate_ai_tweet(summary_text, date_str):
-    prompt = f"""
-        You're a friendly Indian weather bot. Based on the forecast summary below, write 1 tweet.
+    styles = [
+        f"""
+You're a friendly Indian weather bot. Based on the forecast summary below, write a concise tweet.
 
-        Tweet requirements:
-        - Under 280 characters
-        - Start with emoji headline like: "🌦️ Telangana Weather Update – {date_str}"
-        - Include a few zones with 📍 and short alerts (e.g., "📍 North Telangana: 🌧️ Rain in morning")
-        - End with a friendly tip like "Stay safe!" or "Carry an umbrella! ☂️"
-        - No hashtags
+Requirements:
+- Start with something like "🌦️ Telangana Weather – {date_str}" or "Weather today ☁️ – {date_str}"
+- Use casual tone, can include emojis like ☁️ 🌧️ 🔥 💨
+- Include 2–4 zones with alerts like: "📍 East Telangana: Rain at 8 AM"
+- End with a friendly tip or local phrase (e.g., "Stay cool 😎", "Umbrella might help ☂️")
+""",
+        f"""
+Act like a cheerful Hyderabad local sharing today's weather.
 
-        Forecast summary:
-        {summary_text}
+Tweet should:
+- Start with something fun like: "Morning update! 🌄" or "Heads up, folks! 🌧️"
+- Mention weather in different Telangana zones briefly
+- Use local tone, mix emojis, slight humor okay
+- Be under 280 characters
+- End with a tip like "Avoid travel post noon!" or "Best to wrap up early"
+""",
+        f"""
+You're a smart weather assistant. Write a tweet summary for Telangana on {date_str}.
 
-        Tweet:
-        """
+Include:
+- 2–3 zone alerts in bullet/emoji format
+- Avoid being too formal
+- Add a short reminder: “Don’t forget your water bottle!” or “Air quality’s poor, stay in if you can.”
+""",
+    ]
 
+    prompt = random.choice(styles).strip() + f"\n\nForecast summary:\n{summary_text}\n\nTweet:"
+    
     try:
         response = cohere_client.generate(
             model="command-r-plus",
-            prompt=prompt.strip(),
+            prompt=prompt,
             max_tokens=280,
-            temperature=0.7,
+            temperature=0.9,  # slightly higher for creativity
             stop_sequences=["--"]
         )
         return response.generations[0].text.strip()[:280]
-    except:
+    except Exception as e:
+        print("❌ AI generation error:", e)
         return None
 
 def tweet_weather():
