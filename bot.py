@@ -253,16 +253,16 @@ def detect_urgent_alerts(zones):
     cutoff = now + timedelta(hours=3)
 
     CONDITIONS = {
-        "⛈️ Heavy rain expected soon": lambda h: (
+        "⛈️ Heavy rain expected soon": lambda h, data: (
             "thunder" in h.get("condition", {}).get("text", "").lower() or h.get("precip_mm", 0) > 10
         ),
-        "🌦️ Light drizzle expected": lambda h: (
+        "🌦️ Light drizzle expected": lambda h, data: (
             0.5 <= h.get("precip_mm", 0) <= 3
         ),
-        "🔥 Heatwave alert": lambda h: h.get("temp_c", 0) >= 42,
-        "❄️ Cold wave likely": lambda h: h.get("temp_c", 0) <= 10,
-        "💨 Strong winds expected": lambda h: h.get("wind_kph", 0) >= 35,
-        "🌁 Dense fog risk": lambda h: h.get("vis_km", 10) < 2,
+        "🔥 Heatwave alert": lambda h, data: h.get("temp_c", 0) >= 42,
+        "❄️ Cold wave likely": lambda h, data: h.get("temp_c", 0) <= 10,
+        "💨 Strong winds expected": lambda h, data: h.get("wind_kph", 0) >= 35,
+        "🌁 Dense fog risk": lambda h, data: h.get("vis_km", 10) < 2,
         "🟤 Air quality poor": lambda h, data: (
             data.get("current", {}).get("air_quality", {}).get("pm2_5", 0) >= 60
         ),
@@ -285,14 +285,11 @@ def detect_urgent_alerts(zones):
 
                 for alert_msg, condition_fn in CONDITIONS.items():
                     try:
-                        if "air quality" in alert_msg:
-                            if condition_fn(h, data):
-                                urgent_alerts[zone] = alert_msg
-                        else:
-                            if condition_fn(h):
-                                urgent_alerts[zone] = alert_msg
+                        if condition_fn(h, data):
+                            urgent_alerts[zone] = alert_msg
+                            break
                     except Exception as e:
-                        print(f"❌ Condition check failed: {e}")
+                        print(f"❌ Condition check failed for {alert_msg}: {e}")
 
                 if zone in urgent_alerts:
                     break  # Found one valid condition, break city loop
