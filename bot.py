@@ -130,16 +130,16 @@ def extract_alerts(data, start_hour=6, end_hour=18):
 
     return alerts
 
-def get_zone_alerts(zones):
+def get_zone_alerts(zones, start_hour, end_hour):
     zone_alerts = {}
     for zone, cities in zones.items():
         for city in cities:
             data = fetch_weatherapi_forecast(city)
             if not data:
                 continue
-            alerts = extract_alerts(data)
+            alerts = extract_alerts(data, start_hour=start_hour, end_hour=end_hour)
             if alerts:
-                zone_alerts[zone] = alerts[0]  # Only one alert per zone
+                zone_alerts[zone] = alerts[0]
                 break
     return zone_alerts
 
@@ -179,17 +179,31 @@ def generate_ai_tweet(summary_text, date_str):
         return None
 
 def tweet_weather():
-    date_str = datetime.now().strftime("%d %b")
-    tg_alerts = get_zone_alerts(ZONES)
-    hyd_alerts = get_zone_alerts(HYD_ZONES)
+    IST = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(IST)
+    date_str = now.strftime("%d %b")
+
+    # Determine time window
+    if 5 <= now.hour < 12:
+        # Morning tweet: 6 AM – 6 PM
+        start_hour = 6
+        end_hour = 18
+    else:
+        # Evening tweet: 6 PM – 6 AM
+        start_hour = 18
+        end_hour = 6
+
+    # Get weather alerts based on time window
+    tg_alerts = get_zone_alerts(ZONES, start_hour, end_hour)
+    hyd_alerts = get_zone_alerts(HYD_ZONES, start_hour, end_hour)
 
     combined_alerts = {**tg_alerts}
     if hyd_alerts:
         combined_alerts["Hyderabad"] = next(iter(hyd_alerts.values()), None)
 
     summary_text = format_zone_summary(combined_alerts)
-
     tweet_text = generate_ai_tweet(summary_text, date_str)
+
     if tweet_text:
         try:
             res = client.create_tweet(text=tweet_text)
