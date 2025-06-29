@@ -5,6 +5,9 @@ import cohere
 from dotenv import load_dotenv
 from datetime import datetime
 import pytz
+import json
+from datetime import timedelta
+ALERT_CACHE_FILE = "last_alert.json"
 
 load_dotenv()
 cohere_client = cohere.Client(os.getenv("COHERE_API_KEY"))
@@ -172,6 +175,45 @@ def extract_alerts(data, start_hour=6, end_hour=18):
 
     return alerts
 
+def detect_urgent_alerts(zones):
+    urgent_alerts = {}
+
+    now = datetime.now(pytz.timezone("Asia/Kolkata"))
+    cutoff = now + timedelta(hours=3)
+
+    for zone, cities in zones.items():
+        for city in cities:
+            data = fetch_weatherapi_forecast(city)
+            if not data:
+                continue
+
+            hourly = data.get("forecast", {}).get("forecastday", [{}])[0].get("hour", [])
+            for h in hourly:
+                h_time = datetime.strptime(h["time"], "%Y-%m-%d %H:%M").replace(tzinfo=pytz.UTC).astimezone(pytz.timezone("Asia/Kolkata"))
+                if not (now <= h_time <= cutoff):
+                    continue
+
+                text = h.get("condition", {}).get("text", "").lower()
+                temp = h.get("temp_c", 0)
+                rain = h.get("precip_mm", 0)
+                wind = h.get("wind_kph", 0)
+
+                if "thunder" in text or rain > 10:
+                    urgent_alerts[zone] = "⛈️ Heavy rain expected soon"
+                elif temp >= 42:
+                    urgent_alerts[zone] = "🔥 Heatwave alert"
+                elif temp <= 10:
+                    urgent_alerts[zone] = "❄️ Cold wave likely"
+                elif wind >= 40:
+                    urgent_alerts[zone] = "💨 Strong winds expected"
+
+                if zone in urgent_alerts:
+                    break  # Found one alert for this zone
+        if zone in urgent_alerts:
+            continue
+
+    return urgent_alerts
+
 def get_zone_alerts(zones, start_hour, end_hour):
     zone_alerts = {}
     for zone, cities in zones.items():
@@ -239,5 +281,60 @@ def tweet_weather():
     else:
         print("❌ Failed to generate tweet.")
 
+def load_last_alert():
+    try:
+        with open(ALERT_CACHE_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_last_alert(alert_data):
+    with open(ALERT_CACHE_FILE, "w") as f:
+        json.dump(alert_data, f)
+        
+def is_urgent_weather():
+    new_alerts = detect_urgent_alerts({**ZONES, **HYD_ZONES})
+    if not new_alerts:
+        return False
+
+    last_alert = load_last_alert()
+    new_summary = format_zone_summary(new_alerts)
+
+    if last_alert.get("summary") == new_summary:
+        print("⏳ Same alert as before, skipping tweet.")
+        return False
+
+    now = datetime.now(pytz.timezone("Asia/Kolkata"))
+    last_time_str = last_alert.get("timestamp")
+    if last_time_str:
+        last_time = datetime.fromisoformat(last_time_str)
+        if now - last_time < timedelta(hours=3):
+            print("⏱️ Recent alert tweeted already.")
+            return False
+
+    tweet_text = generate_ai_tweet(new_summary, now.strftime("%d %b"), tone="alert")
+    if tweet_text:
+        try:
+            print("📢 Urgent Tweet:\n", tweet_text)
+            res = client.create_tweet(text=tweet_text)
+            print("✅ Urgent weather tweet posted! Tweet ID:", res.data["id"])
+            save_last_alert({
+                "summary": new_summary,
+                "timestamp": now.isoformat()
+            })
+            return True
+        except Exception as e:
+            print("❌ Error tweeting urgent alert:", e)
+    return False
+    
 if __name__ == "__main__":
-    tweet_weather()
+    IST = pytz.timezone("Asia/Kolkata")
+    now = datetime.now(IST)
+
+    if 5 <= now.hour < 12 or 18 <= now.hour < 23:
+        tweet_weather()
+    else:
+        if is_urgent_weather():
+            print("📡 Urgent alert tweeted.")
+        else:
+            print("⏸️ No urgent alert, no scheduled tweet.")
