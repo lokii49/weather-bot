@@ -5,9 +5,8 @@ import cohere
 from dotenv import load_dotenv
 from datetime import datetime
 import pytz
-import json
-from datetime import timedelta
-ALERT_CACHE_FILE = "last_alert.json"
+from github import Github
+GIST_FILE = "last_alert.json"
 
 load_dotenv()
 cohere_client = cohere.Client(os.getenv("COHERE_API_KEY"))
@@ -77,6 +76,33 @@ Tweet rules:
 - End with a friendly Telugu sign‑off (“జాగ్రత్త!”)
 """
 }
+
+def load_last_alert_from_gist():
+    token = os.getenv("GIST_TOKEN")
+    gist_id = os.getenv("GIST_ID")
+    if not token or not gist_id:
+        return {}
+    g = Github(token)
+    try:
+        gist = g.get_gist(gist_id)
+        file = gist.files.get(GIST_FILE)
+        if file and file.content:
+            return json.loads(file.content)
+    except Exception as e:
+        print("❌ Gist load error:", e)
+    return {}
+
+def save_last_alert_to_gist(data):
+    token = os.getenv("GIST_TOKEN")
+    gist_id = os.getenv("GIST_ID")
+    if not token or not gist_id:
+        return
+    g = Github(token)
+    try:
+        gist = g.get_gist(gist_id)
+        gist.edit(files={GIST_FILE: {"content": json.dumps(data)}})
+    except Exception as e:
+        print("❌ Gist save error:", e)
 
 def get_tone_of_day(dt=None):
     TONES = list(TONE_TEMPLATES.keys())  # ["witty", "friendly", "alert", "telugu"]
@@ -280,24 +306,13 @@ def tweet_weather():
             print("❌ Error tweeting:", e)
     else:
         print("❌ Failed to generate tweet.")
-
-def load_last_alert():
-    try:
-        with open(ALERT_CACHE_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_last_alert(alert_data):
-    with open(ALERT_CACHE_FILE, "w") as f:
-        json.dump(alert_data, f)
         
 def is_urgent_weather():
     new_alerts = detect_urgent_alerts({**ZONES, **HYD_ZONES})
     if not new_alerts:
         return False
 
-    last_alert = load_last_alert()
+    last_alert = load_last_alert_from_gist()
     new_summary = format_zone_summary(new_alerts)
 
     if last_alert.get("summary") == new_summary:
@@ -318,7 +333,7 @@ def is_urgent_weather():
             print("📢 Urgent Tweet:\n", tweet_text)
             res = client.create_tweet(text=tweet_text)
             print("✅ Urgent weather tweet posted! Tweet ID:", res.data["id"])
-            save_last_alert({
+            save_last_alert_to_gist({
                 "summary": new_summary,
                 "timestamp": now.isoformat()
             })
