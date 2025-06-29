@@ -4,3 +4,4 @@ requests
 schedule
 pytz
 cohere
+PyGithub
