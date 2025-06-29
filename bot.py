@@ -231,6 +231,7 @@ def tweet_weather():
 
     if tweet_text:
         try:
+            print("📢 Tweet content:\n", tweet_text)
             res = client.create_tweet(text=tweet_text)
             print("✅ Weather tweet posted! Tweet ID:", res.data["id"])
         except Exception as e:
