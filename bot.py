@@ -342,11 +342,24 @@ def tweet_weather():
     now = datetime.now(IST)
     date_str = now.strftime("%d %b")
 
+    # Decide forecast window: morning or evening
     if 5 <= now.hour < 12:
         start_hour, end_hour = 6, 18
     else:
         start_hour, end_hour = 18, 6
 
+    # 🛑 Skip if we're more than 1 hour late into the forecast window
+    forecast_window_start = now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    if start_hour == 18 and now.hour < 18:
+        # If it's early AM but we're forecasting for evening (e.g., during fallback runs), shift date
+        forecast_window_start -= timedelta(days=1)
+        forecast_window_start = forecast_window_start.replace(hour=18)
+
+    if now > forecast_window_start + timedelta(hours=1):
+        print(f"⏸️ Skipping tweet: too late to post {start_hour}:00 forecast. Now: {now.strftime('%I:%M %p')}")
+        return
+
+    # Build zone alerts
     tg_alerts = get_zone_alerts(ZONES, start_hour, end_hour)
     hyd_alerts = get_zone_alerts(HYD_ZONES, start_hour, end_hour)
 
@@ -354,9 +367,14 @@ def tweet_weather():
     if hyd_alerts:
         combined_alerts["Hyderabad"] = next(iter(hyd_alerts.values()))
 
+    if not combined_alerts:
+        print("ℹ️ No weather alerts to tweet.")
+        return
+
     summary_text = format_zone_summary(combined_alerts)
 
-    tone_override = os.getenv("FORCE_TONE")  # optional manual override
+    # Generate tweet using AI
+    tone_override = os.getenv("FORCE_TONE")
     tweet_text = generate_ai_tweet(summary_text, date_str, tone=tone_override)
 
     if tweet_text:
