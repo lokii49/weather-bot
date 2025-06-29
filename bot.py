@@ -2,6 +2,7 @@ import os
 import requests
 import tweepy
 import cohere
+import json
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import pytz
@@ -248,11 +249,15 @@ def detect_urgent_alerts(zones):
 
     return urgent_alerts
 
+city_cache = {}
+
 def get_zone_alerts(zones, start_hour, end_hour):
     zone_alerts = {}
     for zone, cities in zones.items():
         for city in cities:
-            data = fetch_weatherapi_forecast(city)
+            if city not in city_cache:
+                city_cache[city] = fetch_weatherapi_forecast(city)
+            data = city_cache[city]
             if not data:
                 continue
             alerts = extract_alerts(data, start_hour=start_hour, end_hour=end_hour)
