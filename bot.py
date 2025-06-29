@@ -249,9 +249,24 @@ def extract_alerts(data, start_hour=6, end_hour=18):
 
 def detect_urgent_alerts(zones):
     urgent_alerts = {}
-
     now = datetime.now(pytz.timezone("Asia/Kolkata"))
     cutoff = now + timedelta(hours=3)
+
+    CONDITIONS = {
+        "⛈️ Heavy rain expected soon": lambda h: (
+            "thunder" in h.get("condition", {}).get("text", "").lower() or h.get("precip_mm", 0) > 10
+        ),
+        "🌦️ Light drizzle expected": lambda h: (
+            0.5 <= h.get("precip_mm", 0) <= 3
+        ),
+        "🔥 Heatwave alert": lambda h: h.get("temp_c", 0) >= 42,
+        "❄️ Cold wave likely": lambda h: h.get("temp_c", 0) <= 10,
+        "💨 Strong winds expected": lambda h: h.get("wind_kph", 0) >= 35,
+        "🌁 Dense fog risk": lambda h: h.get("vis_km", 10) < 2,
+        "🟤 Air quality poor": lambda h, data: (
+            data.get("current", {}).get("air_quality", {}).get("pm2_5", 0) >= 60
+        ),
+    }
 
     for zone, cities in zones.items():
         for city in cities:
@@ -261,30 +276,28 @@ def detect_urgent_alerts(zones):
 
             hourly = data.get("forecast", {}).get("forecastday", [{}])[0].get("hour", [])
             for h in hourly:
-                h_time = datetime.strptime(h["time"], "%Y-%m-%d %H:%M").replace(tzinfo=pytz.UTC).astimezone(pytz.timezone("Asia/Kolkata"))
+                h_time = datetime.strptime(h["time"], "%Y-%m-%d %H:%M").replace(
+                    tzinfo=pytz.UTC
+                ).astimezone(pytz.timezone("Asia/Kolkata"))
+
                 if not (now <= h_time <= cutoff):
                     continue
 
-                text = h.get("condition", {}).get("text", "").lower()
-                temp = h.get("temp_c", 0)
-                rain = h.get("precip_mm", 0)
-                wind = h.get("wind_kph", 0)
-
-                if "thunder" in text or rain > 10:
-                    urgent_alerts[zone] = "⛈️ Heavy rain expected soon"
-                elif 0.1 <= rain <= 2:
-                    urgent_alerts[zone] = "🌦️ Light drizzle expected"
-                elif temp >= 42:
-                    urgent_alerts[zone] = "🔥 Heatwave alert"
-                elif temp <= 10:
-                    urgent_alerts[zone] = "❄️ Cold wave likely"
-                elif wind >= 40:
-                    urgent_alerts[zone] = "💨 Strong winds expected"
+                for alert_msg, condition_fn in CONDITIONS.items():
+                    try:
+                        if "air quality" in alert_msg:
+                            if condition_fn(h, data):
+                                urgent_alerts[zone] = alert_msg
+                        else:
+                            if condition_fn(h):
+                                urgent_alerts[zone] = alert_msg
+                    except Exception as e:
+                        print(f"❌ Condition check failed: {e}")
 
                 if zone in urgent_alerts:
-                    break  # Found one alert for this zone
+                    break  # Found one valid condition, break city loop
         if zone in urgent_alerts:
-            continue
+            continue  # Move to next zone
 
     return urgent_alerts
 
@@ -360,25 +373,32 @@ def tweet_weather():
         print("❌ Failed to generate tweet.")
         
 def is_urgent_weather():
-    new_alerts = detect_urgent_alerts({**ZONES, **HYD_ZONES})
+    all_zones = {**ZONES, **HYD_ZONES}
+    new_alerts = detect_urgent_alerts(all_zones)
     if not new_alerts:
+        print("✅ No urgent weather conditions detected.")
         return False
 
-    last_alert = load_last_alert_from_gist()
     new_summary = format_zone_summary(new_alerts)
+    last_alert = load_last_alert_from_gist()
 
+    # Compare summaries to avoid re-posting the same alert
     if last_alert.get("summary") == new_summary:
-        print("⏳ Same alert as before, skipping tweet.")
+        print("⏳ Same urgent alert already tweeted.")
         return False
 
     now = datetime.now(pytz.timezone("Asia/Kolkata"))
     last_time_str = last_alert.get("timestamp")
     if last_time_str:
-        last_time = datetime.fromisoformat(last_time_str)
-        if now - last_time < timedelta(hours=3):
-            print("⏱️ Recent alert tweeted already.")
-            return False
+        try:
+            last_time = datetime.fromisoformat(last_time_str)
+            if now - last_time < timedelta(hours=3):
+                print("⏱️ Recent alert posted within cooldown.")
+                return False
+        except ValueError:
+            print("⚠️ Invalid timestamp in gist.")
 
+    # Generate and post urgent tweet
     tweet_text = generate_ai_tweet(new_summary, now.strftime("%d %b"), tone="alert")
     if tweet_text:
         try:
@@ -392,6 +412,9 @@ def is_urgent_weather():
             return True
         except Exception as e:
             print("❌ Error tweeting urgent alert:", e)
+    else:
+        print("❌ Failed to generate urgent tweet.")
+
     return False
     
 if __name__ == "__main__":
