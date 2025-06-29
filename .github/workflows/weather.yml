@@ -32,4 +32,6 @@ jobs:
           ACCESS_SECRET: ${{ secrets.ACCESS_SECRET }}
           BEARER_TOKEN: ${{ secrets.BEARER_TOKEN }}
           WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: python bot.py
