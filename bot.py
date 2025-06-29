@@ -3,7 +3,7 @@ import requests
 import tweepy
 import cohere
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from github import Github
 GIST_FILE = "last_alert.json"
