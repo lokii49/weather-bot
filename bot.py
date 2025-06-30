@@ -36,8 +36,11 @@ client = tweepy.Client(
     access_token=os.getenv("ACCESS_TOKEN"),
     access_token_secret=os.getenv("ACCESS_SECRET")
 )
-user = client.get_me()
-print("Authenticated as:", user.data.username)
+try:
+    user = client.get_me()
+    print("✅ Authenticated as:", user.data.username)
+except tweepy.errors.TooManyRequests:
+    print("⚠️ Rate limit hit while verifying user. Skipping auth print.")
 
 TONE_TEMPLATES = {
     "witty": """
