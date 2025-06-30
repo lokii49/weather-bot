@@ -302,21 +302,37 @@ city_cache = {}
 
 def get_zone_alerts(zones, start_hour, end_hour):
     zone_alerts = {}
+
     for zone, cities in zones.items():
         for city in cities:
+            # Use cache to avoid redundant API calls
             if city not in city_cache:
                 city_cache[city] = fetch_weatherapi_forecast(city)
-            data = city_cache[city]
+
+            data = city_cache.get(city)
             if not data:
                 continue
+
             alerts = extract_alerts(data, start_hour=start_hour, end_hour=end_hour)
+
             if alerts:
+                # Store only the first relevant alert for the zone
                 zone_alerts[zone] = alerts[0]
-                break
+                break  # Stop once the zone has one valid alert
+
     return zone_alerts
 
 def format_zone_summary(zone_alerts):
-    return "\n".join(f"📍 {zone}: {alert}" for zone, alert in zone_alerts.items())
+    if not zone_alerts:
+        return "No alerts today."
+
+    # Sort zones alphabetically for consistency
+    sorted_zones = sorted(zone_alerts.items())
+
+    # Format like 📍 West Hyderabad: 🌧️ Rain expected around 10 AM
+    lines = [f"📍 {zone}: {alert}" for zone, alert in sorted_zones]
+
+    return "\n".join(lines)
 
 def generate_ai_tweet(summary_text, date_str, tone=None):
     if not tone:
