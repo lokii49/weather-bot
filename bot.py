@@ -3,14 +3,15 @@ from datetime import datetime, timedelta
 import requests, pytz
 from github import Github, InputFileContent
 import tweepy
-
-# Load env vars (API keys)
 from dotenv import load_dotenv
+
 load_dotenv()
 
+# Load environment variables
 WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
 GIST_TOKEN = os.getenv("GIST_TOKEN")
 GIST_ID = os.getenv("GIST_ID")
+
 TWEEPY_CLIENT = tweepy.Client(
     bearer_token=os.getenv("BEARER_TOKEN"),
     consumer_key=os.getenv("API_KEY"),
@@ -18,6 +19,14 @@ TWEEPY_CLIENT = tweepy.Client(
     access_token=os.getenv("ACCESS_TOKEN"),
     access_token_secret=os.getenv("ACCESS_SECRET")
 )
+
+# ✅ Log Twitter authentication
+print("🔑 Verifying Twitter credentials...")
+try:
+    me = TWEEPY_CLIENT.get_me()
+    print(f"✅ Authenticated as @{me.data.username}")
+except Exception as e:
+    print("❌ Twitter authentication failed:", e)
 
 ZONES = {
     "Hyderabad": ["Gachibowli", "Kompally", "LB Nagar"],
@@ -76,12 +85,11 @@ def detect_alerts(city, data):
         elif hour.get("wind_kph", 0) > 35:
             alerts.append(f"💨 Strong wind in {city} at {t.strftime('%I %p')}")
     
-    # AQI
     if data.get("current", {}).get("air_quality", {}).get("pm2_5", 0) > 60:
         alerts.append(f"🟤 Poor air quality in {city}")
 
     return alerts
-    
+
 def translate_alert(eng_alert, city, time_label):
     if "rain" in eng_alert.lower():
         return f"🌧️ {city}లో {time_label} గంటలకు వర్షం అవకాశం"
@@ -115,32 +123,15 @@ def save_summary(data):
     gist.edit(files={"last_alert.json": InputFileContent(json.dumps(data))})
 
 def tweet(text):
-    print("🔑 Initializing Twitter client...")
-    try:
-        TWEEPY_CLIENT = tweepy.Client(
-            bearer_token=os.getenv("BEARER_TOKEN"),
-            consumer_key=os.getenv("API_KEY"),
-            consumer_secret=os.getenv("API_SECRET"),
-            access_token=os.getenv("ACCESS_TOKEN"),
-            access_token_secret=os.getenv("ACCESS_SECRET")
-        )
-        me = TWEEPY_CLIENT.get_me()
-        print(f"✅ Twitter authentication successful. Logged in as: @{me.data.username}")
-    except Exception as e:
-        print("❌ Twitter authentication failed:", e)
-        exit(1)
-
-    print("\n📢 Preparing to tweet:\n")
-    print(text)
-    print("\n📤 Sending tweet...")
-
+    print("🐦 Posting tweet...")
     try:
         res = TWEEPY_CLIENT.create_tweet(text=text)
-        print("✅ Tweeted successfully. Tweet ID:", res.data["id"])
+        print("✅ Tweeted successfully:", res.data["id"])
     except Exception as e:
         print("❌ Tweet error:", e)
 
 def main():
+    print("📡 Checking weather data...")
     all_alerts = []
     for zone, cities in ZONES.items():
         for city in cities:
@@ -165,7 +156,9 @@ def main():
 
     if last.get("summary") == summary:
         print("⏳ Alert already posted.")
-        return
+        print("⚠️ Forcing tweet for debug...")
+    else:
+        print("✅ New alert detected. Proceeding to tweet.")
 
     tweet_text = f"⚠️ Weather Alert | వాతావరణ హెచ్చరిక – {datetime.now(IST).strftime('%d %b %I:%M %p')}\n\n{summary}\n\nStay safe. జాగ్రత్తగా ఉండండి. 🌧️"
     tweet(tweet_text)
