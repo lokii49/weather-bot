@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: '0 1 * * *'      # 6:30 AM IST
     - cron: '30 12 * * *'    # 6:00 PM IST
-    - cron: '*/30 * * * *'   # Every 30 minutes
+    - cron: '0 * * * *'   # Every 1 hour
   workflow_dispatch:
 
 jobs:
