@@ -1,4 +1,4 @@
-import os, json
+import os, json, random
 from datetime import datetime, timedelta
 import requests, pytz
 from github import Github, InputFileContent
@@ -38,6 +38,9 @@ ZONES = {
 }
 
 IST = pytz.timezone("Asia/Kolkata")
+
+def get_language_mode():
+    return random.choice(["telugu", "english"])
 
 def translate_zone(zone):
     telugu_zones = {
@@ -132,6 +135,9 @@ def tweet(text):
 
 def main():
     print("📡 Checking weather data...")
+    lang_mode = get_language_mode()
+    print(f"🌐 Randomly selected language: {lang_mode}")
+
     all_alerts = []
     for zone, cities in ZONES.items():
         for city in cities:
@@ -144,7 +150,12 @@ def main():
                 time_str = eng.split("at")[-1].strip()[:5]  # e.g. 04 PM
                 telugu = translate_alert(eng, city, time_str)
                 tel_zone = translate_zone(zone)
-                all_alerts.append(f"📍 {zone}: {eng}\n📍 {tel_zone}: {telugu}")
+
+                if lang_mode == "telugu":
+                    all_alerts.append(f"📍 {tel_zone}: {telugu}")
+                else:
+                    all_alerts.append(f"📍 {zone}: {eng}")
+
                 break  # one city per zone
 
     if not all_alerts:
@@ -160,7 +171,11 @@ def main():
     else:
         print("✅ New alert detected. Proceeding to tweet.")
 
-    tweet_text = f"⚠️ Weather Alert | వాతావరణ హెచ్చరిక – {datetime.now(IST).strftime('%d %b %I:%M %p')}\n\n{summary}\n\nStay safe. జాగ్రత్తగా ఉండండి. 🌧️"
+    if lang_mode == "telugu":
+        tweet_text = f"⚠️ వాతావరణ హెచ్చరిక – {datetime.now(IST).strftime('%d %b %I:%M %p')}\n\n{summary}\n\nజాగ్రత్తగా ఉండండి. 🌧️"
+    else:
+        tweet_text = f"⚠️ Weather Alert – {datetime.now(IST).strftime('%d %b %I:%M %p')}\n\n{summary}\n\nStay safe. 🌧️"
+
     tweet(tweet_text)
 
     save_summary({
