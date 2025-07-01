@@ -115,9 +115,28 @@ def save_summary(data):
     gist.edit(files={"last_alert.json": InputFileContent(json.dumps(data))})
 
 def tweet(text):
+    print("🔑 Initializing Twitter client...")
+    try:
+        TWEEPY_CLIENT = tweepy.Client(
+            bearer_token=os.getenv("BEARER_TOKEN"),
+            consumer_key=os.getenv("API_KEY"),
+            consumer_secret=os.getenv("API_SECRET"),
+            access_token=os.getenv("ACCESS_TOKEN"),
+            access_token_secret=os.getenv("ACCESS_SECRET")
+        )
+        me = TWEEPY_CLIENT.get_me()
+        print(f"✅ Twitter authentication successful. Logged in as: @{me.data.username}")
+    except Exception as e:
+        print("❌ Twitter authentication failed:", e)
+        exit(1)
+
+    print("\n📢 Preparing to tweet:\n")
+    print(text)
+    print("\n📤 Sending tweet...")
+
     try:
         res = TWEEPY_CLIENT.create_tweet(text=text)
-        print("✅ Tweeted:", res.data["id"])
+        print("✅ Tweeted successfully. Tweet ID:", res.data["id"])
     except Exception as e:
         print("❌ Tweet error:", e)
 
