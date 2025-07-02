@@ -76,7 +76,7 @@ def detect_alerts(city):
 
     alerts = []
     now = datetime.now(IST)
-    cutoff = now + timedelta(hours=6)  # ⏱️ Extended forecast window
+    cutoff = now + timedelta(hours=9)
 
     for hour in wapi.get("forecast", {}).get("forecastday", [{}])[0].get("hour", []):
         t = datetime.strptime(hour["time"], "%Y-%m-%d %H:%M").replace(tzinfo=pytz.UTC).astimezone(IST)
@@ -85,19 +85,20 @@ def detect_alerts(city):
 
         cond = hour.get("condition", {}).get("text", "").lower()
         precip = hour.get("precip_mm", 0)
+        prob = hour.get("chance_of_rain", 0)  # ✅ Rain probability
         temp = hour.get("temp_c", 0)
         vis = hour.get("vis_km", 10)
         wind = hour.get("wind_kph", 0)
         time_label = t.strftime('%I %p')
 
         if "heavy rain" in cond or precip > 10:
-            alerts.append((f"🌧️ Heavy rain expected in {city} at {time_label}", "rain"))
+            alerts.append((f"🌧️ Heavy rain expected in {city} at {time_label} ({prob}% chance)", "rain"))
         elif "moderate rain" in cond or (5 < precip <= 10):
-            alerts.append((f"🌦️ Moderate rain expected in {city} at {time_label}", "rain"))
+            alerts.append((f"🌦️ Moderate rain expected in {city} at {time_label} ({prob}% chance)", "rain"))
         elif "light rain" in cond or "drizzle" in cond or (0 < precip <= 5):
-            alerts.append((f"🌦️ Drizzle in {city} at {time_label}", "rain"))
+            alerts.append((f"🌦️ Drizzle in {city} at {time_label} ({prob}% chance)", "rain"))
         elif "thunder" in cond:
-            alerts.append((f"⛈️ Thunderstorm expected in {city} at {time_label}", "rain"))
+            alerts.append((f"⛈️ Thunderstorm expected in {city} at {time_label} ({prob}% chance)", "rain"))
         elif "haze" in cond or "mist" in cond or "smoke" in cond:
             alerts.append((f"🌫️ Hazy conditions in {city} at {time_label}", "fog"))
         elif "fog" in cond or vis < 2:
@@ -108,7 +109,6 @@ def detect_alerts(city):
             alerts.append((f"🔥 Heatwave in {city} at {time_label}", "heat"))
 
     return alerts
-
 
 def load_last_summary():
     if not GIST_TOKEN or not GIST_ID:
@@ -140,7 +140,8 @@ def main():
     all_alerts = []
     has_rain = False
 
-    for zone, cities in {**HYD_ZONES, **ZONES}.items():
+    all_zones = list(HYD_ZONES.items()) + list(ZONES.items())
+    for zone, cities in all_zones:
         for city in cities:
             city_alerts = detect_alerts(city)
             if city_alerts:
