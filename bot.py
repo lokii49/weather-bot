@@ -39,24 +39,6 @@ HYD_ZONES = {
     "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
 }
 
-def get_language_mode():
-    return random.choice(["telugu", "english"])
-
-def translate_zone(zone):
-    telugu_zones = {
-        "North Hyderabad": "ఉత్తర హైదరాబాద్",
-        "South Hyderabad": "దక్షిణ హైదరాబాద్",
-        "East Hyderabad": "తూర్పు హైదరాబాద్",
-        "West Hyderabad": "పడమటి హైదరాబాద్",
-        "Central Hyderabad": "కేంద్ర హైదరాబాద్",
-        "North Telangana": "ఉత్తర తెలంగాణ",
-        "South Telangana": "దక్షిణ తెలంగాణ",
-        "East Telangana": "తూర్పు తెలంగాణ",
-        "West Telangana": "పడమటి తెలంగాణ",
-        "Central Telangana": "కేంద్ర తెలంగాణ"
-    }
-    return telugu_zones.get(zone, zone)
-
 def fetch_weatherapi(city):
     url = "http://api.weatherapi.com/v1/forecast.json"
     params = {
@@ -128,13 +110,6 @@ def detect_alerts(city):
 
     return alerts
 
-def translate_alert(eng_alert, city, time_label):
-    if "rain" in eng_alert.lower():
-        return f"🌧️ {city}లో {time_label} గంటలకు వర్షం అవకాశం"
-    elif "thunder" in eng_alert.lower():
-        return f"⛈️ {city}లో {time_label} గంటలకు ఉరుములతో కూడిన వర్షం"
-    return eng_alert
-
 def load_last_summary():
     if not GIST_TOKEN or not GIST_ID:
         return {}
@@ -162,9 +137,6 @@ def tweet(text):
 
 def main():
     print("📡 Checking weather data...")
-    lang_mode = get_language_mode()
-    print(f"🌐 Language selected: {lang_mode}")
-
     all_alerts = []
     has_rain = False
 
@@ -173,17 +145,11 @@ def main():
             city_alerts = detect_alerts(city)
             if city_alerts:
                 eng, category = city_alerts[0]
-                time_str = eng.split("at")[-1].strip()[:5]
-                telugu = translate_alert(eng, city, time_str)
-                tel_zone = translate_zone(zone)
 
                 if category == "rain":
                     has_rain = True
 
-                if lang_mode == "telugu":
-                    all_alerts.append(f"📍 {tel_zone}: {telugu}")
-                else:
-                    all_alerts.append(f"📍 {zone}: {eng}")
+                all_alerts.append(f"📍 {zone}: {eng}")
                 break
 
     if not all_alerts:
@@ -198,12 +164,8 @@ def main():
         return
 
     now_str = datetime.now(IST).strftime('%d %b %I:%M %p')
-    if lang_mode == "telugu":
-        header = "⚠️ వర్ష సూచన" if has_rain else "⚠️ వాతావరణ హెచ్చరిక"
-        tweet_text = f"{header} – {now_str}\n\n{summary}\n\nజాగ్రత్తగా ఉండండి. 🌧️"
-    else:
-        header = "⚠️ Rain Alert" if has_rain else "⚠️ Weather Alert"
-        tweet_text = f"{header} – {now_str}\n\n{summary}\n\nStay safe. 🌧️"
+    header = "⚠️ Rain Alert" if has_rain else "⚠️ Weather Alert"
+    tweet_text = f"{header} – {now_str}\n\n{summary}\n\nStay safe. 🌧️"
 
     tweet(tweet_text)
     save_summary({"summary": summary, "timestamp": datetime.now(IST).isoformat()})
