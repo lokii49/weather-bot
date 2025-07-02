@@ -90,51 +90,25 @@ def detect_alerts(city, data):
 
         cond = hour.get("condition", {}).get("text", "").lower()
         precip = hour.get("precip_mm", 0)
-        temp = hour.get("temp_c", 0)
-        vis = hour.get("vis_km", 10)
-        wind = hour.get("wind_kph", 0)
 
         if "heavy rain" in cond or precip > 10:
-            alerts.append(f"🌧️ Heavy rain expected in {city} at {t.strftime('%I %p')}")
+            alerts.append(("🌧️ Heavy rain expected in {} at {}".format(city, t.strftime('%I %p')), "rain"))
         elif "moderate rain" in cond or (5 < precip <= 10):
-            alerts.append(f"🌦️ Moderate rain expected in {city} at {t.strftime('%I %p')}")
+            alerts.append(("🌦️ Moderate rain expected in {} at {}".format(city, t.strftime('%I %p')), "rain"))
         elif "light rain" in cond or "drizzle" in cond or (0 < precip <= 5):
-            alerts.append(f"🌦️ Drizzle in {city} at {t.strftime('%I %p')}")
+            alerts.append(("🌦️ Drizzle in {} at {}".format(city, t.strftime('%I %p')), "rain"))
         elif "thunder" in cond:
-            alerts.append(f"⛈️ Thunderstorm expected in {city} at {t.strftime('%I %p')}")
-        elif "haze" in cond or "mist" in cond or "smoke" in cond:
-            alerts.append(f"🌫️ Hazy conditions in {city} at {t.strftime('%I %p')}")
-        elif "fog" in cond or vis < 2:
-            alerts.append(f"🌁 Fog risk in {city} at {t.strftime('%I %p')}")
-        elif wind > 35:
-            alerts.append(f"💨 Strong wind in {city} at {t.strftime('%I %p')}")
-        elif temp >= 40:
-            alerts.append(f"🔥 Heatwave in {city} at {t.strftime('%I %p')}")
-
-    # Air quality check
-    pm2_5 = data.get("current", {}).get("air_quality", {}).get("pm2_5", 0)
-    if pm2_5 > 90:
-        alerts.append(f"🔴 Very poor air quality in {city}")
-    elif pm2_5 > 60:
-        alerts.append(f"🟤 Poor air quality in {city}")
-    elif pm2_5 > 35:
-        alerts.append(f"🟡 Moderate air quality in {city}")
+            alerts.append(("⛈️ Thunderstorm expected in {} at {}".format(city, t.strftime('%I %p')), "rain"))
+        # Other alerts not classified as rain are ignored for tweet
 
     return alerts
 
 def translate_alert(eng_alert, city, time_label):
     if "rain" in eng_alert.lower():
         return f"🌧️ {city}లో {time_label} గంటలకు వర్షం అవకాశం"
-    elif "heatwave" in eng_alert.lower():
-        return f"🔥 {city}లో {time_label} గంటలకు తీవ్రమైన వేడి"
-    elif "fog" in eng_alert.lower():
-        return f"🌁 {city}లో {time_label} గంటలకు మేఘావృతం / పొగమంచు"
-    elif "wind" in eng_alert.lower():
-        return f"💨 {city}లో {time_label} గంటలకు బలమైన గాలి"
-    elif "air quality" in eng_alert.lower():
-        return f"🟤 {city}లో కాలుష్య స్థాయి ఎక్కువగా ఉంది"
-    else:
-        return ""
+    elif "thunder" in eng_alert.lower():
+        return f"⛈️ {city}లో {time_label} గంటలకు ఉరుములతో కూడిన వర్షం"
+    return ""
 
 def load_last_summary():
     if not GIST_TOKEN or not GIST_ID:
@@ -168,27 +142,32 @@ def main():
     print(f"🌐 Randomly selected language: {lang_mode}")
 
     all_alerts = []
+    rain_detected = False  # Track if at least one rain alert was found
 
-    # ✅ Hyderabad zones
+    # Hyderabad zones
     for zone, cities in HYD_ZONES.items():
         for city in cities:
             data = fetch_weather(city)
             if not data:
                 continue
             city_alerts = detect_alerts(city, data)
-            if city_alerts:
-                eng = city_alerts[0]
+
+            # Log all alerts (for future use), but only tweet if rain is present
+            rain_alerts = [a for a in city_alerts if a[1] == "rain"]
+            if rain_alerts:
+                eng = rain_alerts[0][0]
                 time_str = eng.split("at")[-1].strip()[:5]
                 telugu = translate_alert(eng, city, time_str)
                 tel_zone = translate_zone(zone)
 
+                rain_detected = True  # Found a rain alert
                 if lang_mode == "telugu":
                     all_alerts.append(f"📍 {tel_zone}: {telugu}")
                 else:
                     all_alerts.append(f"📍 {zone}: {eng}")
                 break
 
-    # ✅ Telangana zones
+    # Telangana zones
     for zone, cities in ZONES.items():
         if "Hyderabad" in cities:
             continue
@@ -197,20 +176,23 @@ def main():
             if not data:
                 continue
             city_alerts = detect_alerts(city, data)
-            if city_alerts:
-                eng = city_alerts[0]
+
+            rain_alerts = [a for a in city_alerts if a[1] == "rain"]
+            if rain_alerts:
+                eng = rain_alerts[0][0]
                 time_str = eng.split("at")[-1].strip()[:5]
                 telugu = translate_alert(eng, city, time_str)
                 tel_zone = translate_zone(zone)
 
+                rain_detected = True
                 if lang_mode == "telugu":
                     all_alerts.append(f"📍 {tel_zone}: {telugu}")
                 else:
                     all_alerts.append(f"📍 {zone}: {eng}")
                 break
 
-    if not all_alerts:
-        print("✅ No new alerts.")
+    if not rain_detected:
+        print("✅ No rain alerts. Skipping tweet.")
         return
 
     summary = "\n\n".join(sorted(all_alerts))
@@ -218,14 +200,13 @@ def main():
 
     if last.get("summary") == summary:
         print("⏳ Alert already posted.")
-    else:
-        print("✅ New alert detected. Proceeding to tweet.")
+        return
 
     now_str = datetime.now(IST).strftime('%d %b %I:%M %p')
     if lang_mode == "telugu":
-        tweet_text = f"⚠️ వాతావరణ హెచ్చరిక – {now_str}\n\n{summary}\n\nజాగ్రత్తగా ఉండండి. 🌧️"
+        tweet_text = f"⚠️ వర్ష సూచన – {now_str}\n\n{summary}\n\nజాగ్రత్తగా ఉండండి. 🌧️"
     else:
-        tweet_text = f"⚠️ Weather Alert – {now_str}\n\n{summary}\n\nStay safe. 🌧️"
+        tweet_text = f"⚠️ Rain Alert – {now_str}\n\n{summary}\n\nStay safe. 🌧️"
 
     tweet(tweet_text)
     save_summary({"summary": summary, "timestamp": datetime.now(IST).isoformat()})
