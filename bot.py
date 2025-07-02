@@ -283,16 +283,16 @@ def main():
         return
 
     summary = "\n\n".join(sorted(all_alerts))
-    last = load_last_summary()
-
-    if last.get("summary") == summary:
-        print("⏳ Alert already posted.")
-        return
 
     now_str = datetime.now(IST).strftime('%d %b %I:%M %p')
     header = "⚠️ Rain Alert" if has_rain else "⚠️ Weather Alert"
     tweet_text = f"{header} – {now_str}\n\n{summary}\n\nStay safe. 🌧️"
 
+    # ✅ Print the tweet content to console
+    print("\n📢 Tweet content:")
+    print(tweet_text)
+
+    # ✅ Tweet and save as usual
     tweet(tweet_text)
     save_summary({"summary": summary, "timestamp": datetime.now(IST).isoformat()})
 
