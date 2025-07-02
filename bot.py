@@ -9,6 +9,7 @@ load_dotenv()
 
 # Load environment variables
 WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
+OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
 GIST_TOKEN = os.getenv("GIST_TOKEN")
 GIST_ID = os.getenv("GIST_ID")
 
@@ -20,12 +21,7 @@ TWEEPY_CLIENT = tweepy.Client(
     access_token_secret=os.getenv("ACCESS_SECRET")
 )
 
-print("\U0001F511 Verifying Twitter credentials...")
-try:
-    me = TWEEPY_CLIENT.get_me()
-    print(f"✅ Authenticated as @{me.data.username}")
-except Exception as e:
-    print("❌ Twitter authentication failed:", e)
+IST = pytz.timezone("Asia/Kolkata")
 
 ZONES = {
     "North Telangana": ["Adilabad", "Nirmal", "Asifabad", "Mancherial", "Kamareddy"],
@@ -42,8 +38,6 @@ HYD_ZONES = {
     "West Hyderabad": ["Gachibowli", "Kondapur", "Madhapur", "Miyapur"],
     "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
 }
-
-IST = pytz.timezone("Asia/Kolkata")
 
 def get_language_mode():
     return random.choice(["telugu", "english"])
@@ -63,7 +57,7 @@ def translate_zone(zone):
     }
     return telugu_zones.get(zone, zone)
 
-def fetch_weather(city):
+def fetch_weatherapi(city):
     url = "http://api.weatherapi.com/v1/forecast.json"
     params = {
         "key": WEATHERAPI_KEY,
@@ -78,12 +72,31 @@ def fetch_weather(city):
     except:
         return None
 
-def detect_alerts(city, data):
+def fetch_openweather(city):
+    try:
+        geocode_url = f"http://api.openweathermap.org/geo/1.0/direct?q={city},Telangana,IN&limit=1&appid={OPENWEATHER_KEY}"
+        geo_res = requests.get(geocode_url).json()
+        if not geo_res:
+            return None
+        lat, lon = geo_res[0]['lat'], geo_res[0]['lon']
+
+        weather_url = f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&units=metric&appid={OPENWEATHER_KEY}"
+        res = requests.get(weather_url)
+        return res.json() if res.status_code == 200 else None
+    except:
+        return None
+
+def detect_alerts(city):
+    wapi = fetch_weatherapi(city)
+    owm = fetch_openweather(city)
+    if not wapi or not owm:
+        return []
+
+    alerts = []
     now = datetime.now(IST)
     cutoff = now + timedelta(hours=3)
-    alerts = []
 
-    for hour in data.get("forecast", {}).get("forecastday", [{}])[0].get("hour", []):
+    for hour in wapi.get("forecast", {}).get("forecastday", [{}])[0].get("hour", []):
         t = datetime.strptime(hour["time"], "%Y-%m-%d %H:%M").replace(tzinfo=pytz.UTC).astimezone(IST)
         if not (now <= t <= cutoff):
             continue
@@ -113,23 +126,14 @@ def detect_alerts(city, data):
         elif temp >= 40:
             alerts.append((f"🔥 Heatwave in {city} at {time_label}", "heat"))
 
-    # Air quality check
-    pm2_5 = data.get("current", {}).get("air_quality", {}).get("pm2_5", 0)
-    if pm2_5 > 90:
-        alerts.append((f"🔴 Very poor air quality in {city}", "air"))
-    elif pm2_5 > 60:
-        alerts.append((f"🟤 Poor air quality in {city}", "air"))
-    elif pm2_5 > 35:
-        alerts.append((f"🟡 Moderate air quality in {city}", "air"))
-
     return alerts
-    
+
 def translate_alert(eng_alert, city, time_label):
     if "rain" in eng_alert.lower():
         return f"🌧️ {city}లో {time_label} గంటలకు వర్షం అవకాశం"
     elif "thunder" in eng_alert.lower():
         return f"⛈️ {city}లో {time_label} గంటలకు ఉరుములతో కూడిన వర్షం"
-    return ""
+    return eng_alert
 
 def load_last_summary():
     if not GIST_TOKEN or not GIST_ID:
@@ -150,7 +154,6 @@ def save_summary(data):
     gist.edit(files={"last_alert.json": InputFileContent(json.dumps(data))})
 
 def tweet(text):
-    print("🐦 Posting tweet...")
     try:
         res = TWEEPY_CLIENT.create_tweet(text=text)
         print("✅ Tweeted successfully:", res.data["id"])
@@ -160,45 +163,14 @@ def tweet(text):
 def main():
     print("📡 Checking weather data...")
     lang_mode = get_language_mode()
-    print(f"🌐 Randomly selected language: {lang_mode}")
+    print(f"🌐 Language selected: {lang_mode}")
 
     all_alerts = []
-    has_rain = False  # Track if any rain alerts are present
+    has_rain = False
 
-    # Hyderabad zones
-    for zone, cities in HYD_ZONES.items():
+    for zone, cities in {**HYD_ZONES, **ZONES}.items():
         for city in cities:
-            data = fetch_weather(city)
-            if not data:
-                continue
-            city_alerts = detect_alerts(city, data)
-
-            if city_alerts:
-                # Pick the first alert for tweet
-                eng, category = city_alerts[0]
-                time_str = eng.split("at")[-1].strip()[:5]
-                telugu = translate_alert(eng, city, time_str)
-                tel_zone = translate_zone(zone)
-
-                if category == "rain":
-                    has_rain = True
-
-                if lang_mode == "telugu":
-                    all_alerts.append(f"📍 {tel_zone}: {telugu}")
-                else:
-                    all_alerts.append(f"📍 {zone}: {eng}")
-                break
-
-    # Telangana zones
-    for zone, cities in ZONES.items():
-        if "Hyderabad" in cities:
-            continue
-        for city in cities:
-            data = fetch_weather(city)
-            if not data:
-                continue
-            city_alerts = detect_alerts(city, data)
-
+            city_alerts = detect_alerts(city)
             if city_alerts:
                 eng, category = city_alerts[0]
                 time_str = eng.split("at")[-1].strip()[:5]
