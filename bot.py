@@ -76,7 +76,7 @@ def detect_alerts(city):
 
     alerts = []
     now = datetime.now(IST)
-    cutoff = now + timedelta(hours=3)
+    cutoff = now + timedelta(hours=6)  # ⏱️ Extended forecast window
 
     for hour in wapi.get("forecast", {}).get("forecastday", [{}])[0].get("hour", []):
         t = datetime.strptime(hour["time"], "%Y-%m-%d %H:%M").replace(tzinfo=pytz.UTC).astimezone(IST)
@@ -88,7 +88,6 @@ def detect_alerts(city):
         temp = hour.get("temp_c", 0)
         vis = hour.get("vis_km", 10)
         wind = hour.get("wind_kph", 0)
-
         time_label = t.strftime('%I %p')
 
         if "heavy rain" in cond or precip > 10:
@@ -109,6 +108,7 @@ def detect_alerts(city):
             alerts.append((f"🔥 Heatwave in {city} at {time_label}", "heat"))
 
     return alerts
+
 
 def load_last_summary():
     if not GIST_TOKEN or not GIST_ID:
