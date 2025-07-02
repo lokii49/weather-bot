@@ -20,8 +20,7 @@ TWEEPY_CLIENT = tweepy.Client(
     access_token_secret=os.getenv("ACCESS_SECRET")
 )
 
-# ✅ Log Twitter authentication
-print("🔑 Verifying Twitter credentials...")
+print("\U0001F511 Verifying Twitter credentials...")
 try:
     me = TWEEPY_CLIENT.get_me()
     print(f"✅ Authenticated as @{me.data.username}")
@@ -29,12 +28,19 @@ except Exception as e:
     print("❌ Twitter authentication failed:", e)
 
 ZONES = {
-    "Hyderabad": ["Gachibowli", "Kompally", "LB Nagar"],
-    "North Telangana": ["Adilabad", "Nirmal"],
-    "South Telangana": ["Mahabubnagar", "Nagarkurnool"],
-    "East Telangana": ["Khammam", "Warangal"],
-    "West Telangana": ["Sangareddy", "Zaheerabad"],
-    "Central Telangana": ["Medchal", "Karimnagar"]
+    "North Telangana": ["Adilabad", "Nirmal", "Asifabad", "Mancherial", "Kamareddy"],
+    "South Telangana": ["Mahabubnagar", "Gadwal", "Wanaparthy", "Nagarkurnool", "Narayanpet"],
+    "East Telangana": ["Khammam", "Bhadrachalam", "Mahabubabad", "Warangal", "Suryapet"],
+    "West Telangana": ["Vikarabad", "Sangareddy", "Zaheerabad"],
+    "Central Telangana": ["Hyderabad", "Medchal", "Siddipet", "Nalgonda", "Karimnagar"]
+}
+
+HYD_ZONES = {
+    "North Hyderabad": ["Kompally", "Medchal", "Suchitra", "Bolarum"],
+    "South Hyderabad": ["LB Nagar", "Malakpet", "Falaknuma", "Kanchanbagh"],
+    "East Hyderabad": ["Uppal", "Ghatkesar", "Keesara"],
+    "West Hyderabad": ["Gachibowli", "Kondapur", "Madhapur", "Miyapur"],
+    "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
 }
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -44,11 +50,15 @@ def get_language_mode():
 
 def translate_zone(zone):
     telugu_zones = {
-        "Hyderabad": "హైదరాబాద్",
+        "North Hyderabad": "ఉత్తర హైదరాబాద్",
+        "South Hyderabad": "దక్షిణ హైదరాబాద్",
+        "East Hyderabad": "తూర్పు హైదరాబాద్",
+        "West Hyderabad": "పడమటి హైదరాబాద్",
+        "Central Hyderabad": "కేంద్ర హైదరాబాద్",
         "North Telangana": "ఉత్తర తెలంగాణ",
         "South Telangana": "దక్షిణ తెలంగాణ",
         "East Telangana": "తూర్పు తెలంగాణ",
-        "West Telangana": "పడమట తెలంగాణ",
+        "West Telangana": "పడమటి తెలంగాణ",
         "Central Telangana": "కేంద్ర తెలంగాణ"
     }
     return telugu_zones.get(zone, zone)
@@ -79,17 +89,36 @@ def detect_alerts(city, data):
             continue
 
         cond = hour.get("condition", {}).get("text", "").lower()
-        if "rain" in cond or "thunder" in cond or hour.get("precip_mm", 0) > 5:
-            alerts.append(f"🌧️ Rain expected in {city} at {t.strftime('%I %p')}")
-        elif hour.get("temp_c", 0) >= 40:
-            alerts.append(f"🔥 Heatwave in {city} at {t.strftime('%I %p')}")
-        elif hour.get("vis_km", 10) < 2:
+        precip = hour.get("precip_mm", 0)
+        temp = hour.get("temp_c", 0)
+        vis = hour.get("vis_km", 10)
+        wind = hour.get("wind_kph", 0)
+
+        if "heavy rain" in cond or precip > 10:
+            alerts.append(f"🌧️ Heavy rain expected in {city} at {t.strftime('%I %p')}")
+        elif "moderate rain" in cond or (5 < precip <= 10):
+            alerts.append(f"🌦️ Moderate rain expected in {city} at {t.strftime('%I %p')}")
+        elif "light rain" in cond or "drizzle" in cond or (0 < precip <= 5):
+            alerts.append(f"🌦️ Drizzle in {city} at {t.strftime('%I %p')}")
+        elif "thunder" in cond:
+            alerts.append(f"⛈️ Thunderstorm expected in {city} at {t.strftime('%I %p')}")
+        elif "haze" in cond or "mist" in cond or "smoke" in cond:
+            alerts.append(f"🌫️ Hazy conditions in {city} at {t.strftime('%I %p')}")
+        elif "fog" in cond or vis < 2:
             alerts.append(f"🌁 Fog risk in {city} at {t.strftime('%I %p')}")
-        elif hour.get("wind_kph", 0) > 35:
+        elif wind > 35:
             alerts.append(f"💨 Strong wind in {city} at {t.strftime('%I %p')}")
-    
-    if data.get("current", {}).get("air_quality", {}).get("pm2_5", 0) > 60:
+        elif temp >= 40:
+            alerts.append(f"🔥 Heatwave in {city} at {t.strftime('%I %p')}")
+
+    # Air quality check
+    pm2_5 = data.get("current", {}).get("air_quality", {}).get("pm2_5", 0)
+    if pm2_5 > 90:
+        alerts.append(f"🔴 Very poor air quality in {city}")
+    elif pm2_5 > 60:
         alerts.append(f"🟤 Poor air quality in {city}")
+    elif pm2_5 > 35:
+        alerts.append(f"🟡 Moderate air quality in {city}")
 
     return alerts
 
@@ -139,30 +168,29 @@ def main():
     print(f"🌐 Randomly selected language: {lang_mode}")
 
     all_alerts = []
-    included_zones = set()
-    hyderabad_alert = None
 
-    # First, guarantee Hyderabad alert
-    for city in ZONES["Hyderabad"]:
-        data = fetch_weather(city)
-        if not data:
-            continue
-        city_alerts = detect_alerts(city, data)
-        if city_alerts:
-            eng = city_alerts[0]
-            time_str = eng.split("at")[-1].strip()[:5]
-            telugu = translate_alert(eng, city, time_str)
-            tel_zone = translate_zone("Hyderabad")
+    # ✅ Hyderabad zones
+    for zone, cities in HYD_ZONES.items():
+        for city in cities:
+            data = fetch_weather(city)
+            if not data:
+                continue
+            city_alerts = detect_alerts(city, data)
+            if city_alerts:
+                eng = city_alerts[0]
+                time_str = eng.split("at")[-1].strip()[:5]
+                telugu = translate_alert(eng, city, time_str)
+                tel_zone = translate_zone(zone)
 
-            if lang_mode == "telugu":
-                hyderabad_alert = f"📍 {tel_zone}: {telugu}"
-            else:
-                hyderabad_alert = f"📍 Hyderabad: {eng}"
-            break
+                if lang_mode == "telugu":
+                    all_alerts.append(f"📍 {tel_zone}: {telugu}")
+                else:
+                    all_alerts.append(f"📍 {zone}: {eng}")
+                break
 
-    # Then, gather alerts from other zones (excluding Hyderabad)
+    # ✅ Telangana zones
     for zone, cities in ZONES.items():
-        if zone == "Hyderabad":
+        if "Hyderabad" in cities:
             continue
         for city in cities:
             data = fetch_weather(city)
@@ -179,38 +207,28 @@ def main():
                     all_alerts.append(f"📍 {tel_zone}: {telugu}")
                 else:
                     all_alerts.append(f"📍 {zone}: {eng}")
-                break  # one city per zone
+                break
 
-    if not hyderabad_alert and not all_alerts:
+    if not all_alerts:
         print("✅ No new alerts.")
         return
 
-    summary_items = []
-    if hyderabad_alert:
-        summary_items.append(hyderabad_alert)
-    summary_items.extend(sorted(all_alerts))
-
-    summary = "\n\n".join(summary_items)
+    summary = "\n\n".join(sorted(all_alerts))
     last = load_last_summary()
 
     if last.get("summary") == summary:
         print("⏳ Alert already posted.")
-        print("⚠️ Forcing tweet for debug...")
     else:
         print("✅ New alert detected. Proceeding to tweet.")
 
-    timestamp = datetime.now(IST).strftime('%d %b %I:%M %p')
+    now_str = datetime.now(IST).strftime('%d %b %I:%M %p')
     if lang_mode == "telugu":
-        tweet_text = f"⚠️ వాతావరణ హెచ్చరిక – {timestamp}\n\n{summary}\n\nజాగ్రత్తగా ఉండండి. 🌧️"
+        tweet_text = f"⚠️ వాతావరణ హెచ్చరిక – {now_str}\n\n{summary}\n\nజాగ్రత్తగా ఉండండి. 🌧️"
     else:
-        tweet_text = f"⚠️ Weather Alert – {timestamp}\n\n{summary}\n\nStay safe. 🌧️"
+        tweet_text = f"⚠️ Weather Alert – {now_str}\n\n{summary}\n\nStay safe. 🌧️"
 
     tweet(tweet_text)
-
-    save_summary({
-        "summary": summary,
-        "timestamp": datetime.now(IST).isoformat()
-    })
+    save_summary({"summary": summary, "timestamp": datetime.now(IST).isoformat()})
 
 if __name__ == "__main__":
     main()
