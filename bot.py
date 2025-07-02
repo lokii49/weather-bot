@@ -1,3 +1,4 @@
+# [Same imports as before]
 import os, json, random, cohere
 from datetime import datetime, timedelta
 import requests, pytz
@@ -7,7 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Environment
+# API keys
 WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
 WEATHERBIT_KEY = os.getenv("WEATHERBIT_KEY")
@@ -18,6 +19,7 @@ GIST_ID = os.getenv("GIST_ID")
 IST = pytz.timezone("Asia/Kolkata")
 co = cohere.Client(COHERE_API_KEY)
 
+# Twitter Auth
 TWEEPY_CLIENT = tweepy.Client(
     bearer_token=os.getenv("BEARER_TOKEN"),
     consumer_key=os.getenv("API_KEY"),
@@ -55,45 +57,28 @@ def fetch_weatherapi(city):
     except:
         return None
 
+def fetch_openweather(city):
+    try:
+        geo = requests.get(f"http://api.openweathermap.org/geo/1.0/direct?q={city},Telangana,IN&limit=1&appid={OPENWEATHER_KEY}").json()
+        if not geo: return None
+        lat, lon = geo[0]['lat'], geo[0]['lon']
+        res = requests.get(f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&units=metric&appid={OPENWEATHER_KEY}")
+        return res.json() if res.status_code == 200 else None
+    except:
+        return None
+
 def fetch_weatherbit(city):
     try:
         geo = requests.get(f"http://api.openweathermap.org/geo/1.0/direct?q={city},Telangana,IN&limit=1&appid={OPENWEATHER_KEY}").json()
         if not geo: return None
         lat, lon = geo[0]['lat'], geo[0]['lon']
-        res = requests.get("https://api.weatherbit.io/v2.0/forecast/daily", params={
+        res = requests.get("https://api.weatherbit.io/v2.0/forecast/hourly", params={
             "lat": lat,
             "lon": lon,
             "key": WEATHERBIT_KEY,
-            "days": 1
+            "hours": 12
         }, timeout=10)
         return res.json() if res.status_code == 200 else None
-    except:
-        return None
-
-def fetch_weatherbit_current(city):
-    try:
-        geo = requests.get(f"http://api.openweathermap.org/geo/1.0/direct?q={city},Telangana,IN&limit=1&appid={OPENWEATHER_KEY}").json()
-        if not geo: return None
-        lat, lon = geo[0]['lat'], geo[0]['lon']
-        res = requests.get("https://api.weatherbit.io/v2.0/current", params={
-            "lat": lat,
-            "lon": lon,
-            "key": WEATHERBIT_KEY
-        }, timeout=10)
-        return res.json() if res.status_code == 200 else None
-    except:
-        return None
-
-def get_forecast_summary(city):
-    data = fetch_weatherapi(city)
-    if not data: return None
-    try:
-        day = data["forecast"]["forecastday"][0]["day"]
-        condition = day["condition"]["text"]
-        min_temp = day["mintemp_c"]
-        max_temp = day["maxtemp_c"]
-        chance_rain = day["daily_chance_of_rain"]
-        return f"{city}: {condition}, {int(min_temp)}–{int(max_temp)}°C, 🌧️ {chance_rain}% rain"
     except:
         return None
 
@@ -102,43 +87,55 @@ def detect_alerts(city):
     cutoff = now + timedelta(hours=9)
     alerts = []
 
-    def process_hour(t, cond, precip, prob, temp, vis, wind, src):
-        time_label = t.strftime('%I %p')
-        cond = cond.lower()
-        if "heavy rain" in cond or precip > 10:
-            return (f"⚠️ Heavy rain in {city} at {time_label} ({prob}% chance) [{src}]", "rain")
-        elif "moderate rain" in cond or (5 < precip <= 10):
-            return (f"⚠️ Moderate rain in {city} at {time_label} ({prob}% chance) [{src}]", "rain")
-        elif "thunder" in cond:
-            return (f"⚠️ Thunderstorm in {city} at {time_label} [{src}]", "rain")
-        elif "fog" in cond or vis < 2:
-            return (f"⚠️ Fog risk in {city} at {time_label} [{src}]", "fog")
-        elif wind > 35:
-            return (f"⚠️ Strong wind in {city} at {time_label} ({round(wind)} km/h) [{src}]", "wind")
-        elif temp >= 40:
-            return (f"⚠️ Heatwave in {city} at {time_label} ({temp}°C) [{src}]", "heat")
-        return None
+    wapi = fetch_weatherapi(city)
+    owm = fetch_openweather(city)
+    wb = fetch_weatherbit(city)
+
+    def format_alert(t, cond, precip, prob, temp, vis, wind, aqi, humidity, src):
+        time_label = t.strftime('%I:%M %p')
+        return (
+            f"{cond} at {time_label} — "
+            f"{temp}°C, 🌧️{precip}mm ({prob}%), "
+            f"💨{round(wind)}km/h, 🌫️{vis}km, "
+            f"💧{humidity}%, AQI {aqi} [{src}]"
+        )
 
     try:
-        wapi = fetch_weatherapi(city)
         for hour in wapi.get("forecast", {}).get("forecastday", [{}])[0].get("hour", []):
             t = datetime.strptime(hour["time"], "%Y-%m-%d %H:%M").replace(tzinfo=pytz.UTC).astimezone(IST)
             if now <= t <= cutoff:
-                alert = process_hour(t, hour.get("condition", {}).get("text", ""), hour.get("precip_mm", 0), hour.get("chance_of_rain", 0),
-                                     hour.get("temp_c", 0), hour.get("vis_km", 10), hour.get("wind_kph", 0), "WeatherAPI")
-                if alert: alerts.append(alert); break
+                aqi = hour.get("air_quality", {}).get("pm2_5", 50)
+                alert = format_alert(t, hour.get("condition", {}).get("text", ""), hour.get("precip_mm", 0),
+                                     hour.get("chance_of_rain", 0), hour.get("temp_c", 0), hour.get("vis_km", 10),
+                                     hour.get("wind_kph", 0), int(aqi), hour.get("humidity", 60), "WeatherAPI")
+                alerts.append(alert)
+                break
     except: pass
 
     try:
-        wb_now = fetch_weatherbit_current(city)
-        if wb_now and wb_now.get("data"):
-            d = wb_now["data"][0]
-            alert = process_hour(now, d.get("weather", {}).get("description", ""), d.get("precip", 0), 100,
-                                 d.get("temp", 0), d.get("vis", 10), d.get("wind_spd", 0) * 3.6, "Weatherbit Now")
-            if alert: alerts.append(alert)
+        for hour in owm.get("list", []):
+            t = datetime.utcfromtimestamp(hour["dt"]).replace(tzinfo=pytz.UTC).astimezone(IST)
+            if now <= t <= cutoff:
+                alert = format_alert(t, hour.get("weather", [{}])[0].get("description", ""), hour.get("rain", {}).get("3h", 0),
+                                     int(hour.get("pop", 0) * 100), hour.get("main", {}).get("temp", 0),
+                                     hour.get("visibility", 10000) / 1000, hour.get("wind", {}).get("speed", 0) * 3.6,
+                                     60, hour.get("main", {}).get("humidity", 60), "OpenWeather")
+                alerts.append(alert)
+                break
     except: pass
 
-    return [msg for msg, _ in alerts]
+    try:
+        for hour in wb.get("data", []):
+            t = datetime.strptime(hour["timestamp_local"], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=IST)
+            if now <= t <= cutoff:
+                alert = format_alert(t, hour.get("weather", {}).get("description", ""), hour.get("precip", 0),
+                                     hour.get("pop", 0), hour.get("temp", 0), hour.get("vis", 10),
+                                     hour.get("wind_spd", 0) * 3.6, 55, hour.get("rh", 60), "Weatherbit")
+                alerts.append(alert)
+                break
+    except: pass
+
+    return alerts
 
 def load_last_summary():
     if not GIST_TOKEN or not GIST_ID: return {}
@@ -161,28 +158,28 @@ def tweet(text):
     except Exception as e:
         print("❌ Tweet error:", e)
 
-def generate_tweet(summary, date, tone="daily_alert"):
-    TEMPLATES = {
-        "daily_alert": f"""Write a tweet combining daily forecast and weather alerts for Telangana - {date}.
+def generate_tweet(summary, date, tone="alert"):
+    prompt = f"""Write a tweet for Telangana weather on {date}.
+Include actual weather values like:
+📍 Zone: Rain at 3:00 PM — 26°C, 3mm (60%), 15km/h, 2km, 70%, AQI 65
 
-- Use 3–5 zones
-- For each: 📍 Zone name, newline: City: condition, temp, rain chance
-- If alert exists, add ⚠️ line under it (short)
-- Keep tweet friendly & informative (<280 chars)
-- End with a helpful tip
+Start with:
+⚠️ Weather Update – {date}
 
-Forecast:
+Include 2‑4 zone alerts + short safety tip.
+Limit 280 characters.
+
+Summary:
 {summary}
 
-Write tweet:"""
-    }
+Tweet:"""
 
     try:
         res = co.generate(
             model="command-r-plus",
-            prompt=TEMPLATES[tone],
+            prompt=prompt,
             max_tokens=150,
-            temperature=0.8,
+            temperature=0.7,
             stop_sequences=["\n\n"]
         )
         tweet = res.generations[0].text.strip()
@@ -192,37 +189,31 @@ Write tweet:"""
         return None
 
 def main():
-    print("📡 Checking weather data...")
-    zone_forecasts = []
+    print("📡 Fetching alerts...")
+    all_alerts = []
     all_zones = list(HYD_ZONES.items()) + list(ZONES.items())
 
     for zone, cities in all_zones:
-        for city in cities[:1]:  # Only 1 city per zone
-            forecast = get_forecast_summary(city)
+        for city in cities:
             alerts = detect_alerts(city)
-            if forecast:
-                entry = f"📍 {zone}:\n{forecast}"
-                if alerts:
-                    entry += f"\n{alerts[0]}"  # Only first alert
-                zone_forecasts.append(entry)
-            break
+            if alerts:
+                all_alerts.append(f"📍 {zone}: {alerts[0]}")
+                break
 
-    if not zone_forecasts:
-        print("✅ No forecast available. Skipping.")
+    if not all_alerts:
+        print("✅ No alerts.")
         return
 
-    summary = "\n\n".join(zone_forecasts[:5])  # Top 5 zones
+    summary = "\n".join(sorted(all_alerts)[:4])
     last = load_last_summary()
     now_str = datetime.now(IST).strftime('%d %b %I:%M %p')
 
-    tweet_text = generate_tweet(summary, now_str, tone="daily_alert")
-
-    print("\n📢 Tweet content:\n")
-    print(tweet_text or "❌ Failed to generate tweet.")
-
     if last.get("summary") == summary:
-        print("⏳ Same as last tweet. Skipping.")
+        print("⏳ No new alert.")
         return
+
+    tweet_text = generate_tweet(summary, now_str)
+    print("\n📢 Generated Tweet:\n", tweet_text or "⚠️ Failed to generate tweet.")
 
     if tweet_text:
         tweet(tweet_text)
