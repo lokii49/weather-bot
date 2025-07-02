@@ -139,7 +139,31 @@ def main():
     print(f"🌐 Randomly selected language: {lang_mode}")
 
     all_alerts = []
+    included_zones = set()
+    hyderabad_alert = None
+
+    # First, guarantee Hyderabad alert
+    for city in ZONES["Hyderabad"]:
+        data = fetch_weather(city)
+        if not data:
+            continue
+        city_alerts = detect_alerts(city, data)
+        if city_alerts:
+            eng = city_alerts[0]
+            time_str = eng.split("at")[-1].strip()[:5]
+            telugu = translate_alert(eng, city, time_str)
+            tel_zone = translate_zone("Hyderabad")
+
+            if lang_mode == "telugu":
+                hyderabad_alert = f"📍 {tel_zone}: {telugu}"
+            else:
+                hyderabad_alert = f"📍 Hyderabad: {eng}"
+            break
+
+    # Then, gather alerts from other zones (excluding Hyderabad)
     for zone, cities in ZONES.items():
+        if zone == "Hyderabad":
+            continue
         for city in cities:
             data = fetch_weather(city)
             if not data:
@@ -147,7 +171,7 @@ def main():
             city_alerts = detect_alerts(city, data)
             if city_alerts:
                 eng = city_alerts[0]
-                time_str = eng.split("at")[-1].strip()[:5]  # e.g. 04 PM
+                time_str = eng.split("at")[-1].strip()[:5]
                 telugu = translate_alert(eng, city, time_str)
                 tel_zone = translate_zone(zone)
 
@@ -155,14 +179,18 @@ def main():
                     all_alerts.append(f"📍 {tel_zone}: {telugu}")
                 else:
                     all_alerts.append(f"📍 {zone}: {eng}")
-
                 break  # one city per zone
 
-    if not all_alerts:
+    if not hyderabad_alert and not all_alerts:
         print("✅ No new alerts.")
         return
 
-    summary = "\n\n".join(sorted(all_alerts))
+    summary_items = []
+    if hyderabad_alert:
+        summary_items.append(hyderabad_alert)
+    summary_items.extend(sorted(all_alerts))
+
+    summary = "\n\n".join(summary_items)
     last = load_last_summary()
 
     if last.get("summary") == summary:
@@ -171,10 +199,11 @@ def main():
     else:
         print("✅ New alert detected. Proceeding to tweet.")
 
+    timestamp = datetime.now(IST).strftime('%d %b %I:%M %p')
     if lang_mode == "telugu":
-        tweet_text = f"⚠️ వాతావరణ హెచ్చరిక – {datetime.now(IST).strftime('%d %b %I:%M %p')}\n\n{summary}\n\nజాగ్రత్తగా ఉండండి. 🌧️"
+        tweet_text = f"⚠️ వాతావరణ హెచ్చరిక – {timestamp}\n\n{summary}\n\nజాగ్రత్తగా ఉండండి. 🌧️"
     else:
-        tweet_text = f"⚠️ Weather Alert – {datetime.now(IST).strftime('%d %b %I:%M %p')}\n\n{summary}\n\nStay safe. 🌧️"
+        tweet_text = f"⚠️ Weather Alert – {timestamp}\n\n{summary}\n\nStay safe. 🌧️"
 
     tweet(tweet_text)
 
