@@ -1,4 +1,4 @@
-import os, json, random
+import os, json, random, cohere
 from datetime import datetime, timedelta
 import requests, pytz
 from github import Github, InputFileContent
@@ -12,6 +12,8 @@ WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
 OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
 GIST_TOKEN = os.getenv("GIST_TOKEN")
 GIST_ID = os.getenv("GIST_ID")
+COHERE_API_KEY = os.getenv("COHERE_API_KEY")
+co = cohere.Client(COHERE_API_KEY)
 
 TWEEPY_CLIENT = tweepy.Client(
     bearer_token=os.getenv("BEARER_TOKEN"),
@@ -37,6 +39,42 @@ HYD_ZONES = {
     "East Hyderabad": ["Uppal", "Ghatkesar", "Keesara"],
     "West Hyderabad": ["Gachibowli", "Kondapur", "Madhapur", "Miyapur"],
     "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
+}
+
+TONE_TEMPLATES = {
+    "witty": """
+You are a witty Hyderabad local who loves puns.
+Write ONE tweet (<280 chars) about the forecast below.
+
+Rules:
+- Start with a playful headline, e.g. “Rain, rain, go a‑Hydera‑way ☔ – {date}”
+- Mention 2‑4 zone alerts using 📍
+- Light humour or wordplay is welcome
+- End with a cheeky sign‑off (e.g., “Chai‑me for updates! ☕”)
+""",
+    "friendly": """
+You’re a friendly Indian neighbour sharing today’s weather.
+Tweet requirements:
+- Warm greeting + date, e.g. “Morning folks!  {date}”
+- 2‑4 zone alerts with 📍
+- Simple emojis allowed
+- End with a caring tip ( “Stay hydrated!” etc.)
+""",
+    "alert": """
+Adopt a crisp, alert‑style tone (like emergency services).
+Tweet rules:
+- Headline: “⚠️ Weather Alert – {date}”
+- Bullet‑like zone alerts (📍)
+- No humour, be direct
+- Finish with a safety CTA (“Travel only if needed.”)
+""",
+    "telugu": """
+Switch to a casual Telugu‑English mix (“Teluglish”).
+Tweet rules:
+- Open with a Telugu greeting + date, e.g. “శుభోదయం! {date}”
+- Zone alerts with 📍; include at least one Telugu phrase (“వర్షం వస్తోంది!” etc.)
+- End with a friendly Telugu sign‑off (“జాగ్రత్త!”)
+"""
 }
 
 def fetch_weatherapi(city):
@@ -271,10 +309,8 @@ def main():
             city_alerts = detect_alerts(city)
             if city_alerts:
                 eng, category = city_alerts[0]
-
                 if category == "rain":
                     has_rain = True
-
                 all_alerts.append(f"📍 {zone}: {eng}")
                 break
 
@@ -283,18 +319,90 @@ def main():
         return
 
     summary = "\n\n".join(sorted(all_alerts))
-
+    last = load_last_summary()
     now_str = datetime.now(IST).strftime('%d %b %I:%M %p')
-    header = "⚠️ Rain Alert" if has_rain else "⚠️ Weather Alert"
-    tweet_text = f"{header} – {now_str}\n\n{summary}\n\nStay safe. 🌧️"
 
-    # ✅ Print the tweet content to console
-    print("\n📢 Tweet content:")
-    print(tweet_text)
+    # Always generate tweet for display
+    tweet_text = generate_tweet(summary, now_str, tone="witty")
 
-    # ✅ Tweet and save as usual
-    tweet(tweet_text)
-    save_summary({"summary": summary, "timestamp": datetime.now(IST).isoformat()})
+    print("\n📢 Tweet content:\n")
+    print(tweet_text if tweet_text else "❌ Failed to generate tweet.")
+
+    # Only skip actual tweet if already posted
+    if last.get("summary") == summary:
+        print("⏳ Alert already posted. Skipping tweet API call.")
+        return
+
+    if tweet_text:
+        tweet(tweet_text)
+        save_summary({"summary": summary, "timestamp": datetime.now(IST).isoformat()})
+
+def generate_tweet(summary, date, tone="alert"):
+    import cohere
+
+    COHERE_API_KEY = os.getenv("COHERE_API_KEY")
+    co = cohere.Client(COHERE_API_KEY)
+
+    TONE_TEMPLATES = {
+        "witty": """
+You are a witty Hyderabad local who loves puns.
+Write ONE tweet (<280 chars) about the forecast below.
+
+Rules:
+- Start with a playful headline, e.g. “Rain, rain, go a‑Hydera‑way ☔ – {date}”
+- Mention 2‑4 zone alerts using 📍
+- Light humour or wordplay is welcome
+- End with a cheeky sign‑off (e.g., “Chai‑me for updates! ☕”)
+""",
+        "friendly": """
+You’re a friendly Indian neighbour sharing today’s weather.
+Tweet requirements:
+- Warm greeting + date, e.g. “Morning folks!  {date}”
+- 2‑4 zone alerts with 📍
+- Simple emojis allowed
+- End with a caring tip ( “Stay hydrated!” etc.)
+""",
+        "alert": """
+Adopt a crisp, alert‑style tone (like emergency services).
+Tweet rules:
+- Headline: “⚠️ Weather Alert – {date}”
+- Bullet‑like zone alerts (📍)
+- No humour, be direct
+- Finish with a safety CTA (“Travel only if needed.”)
+""",
+        "telugu": """
+Switch to a casual Telugu‑English mix (“Teluglish”).
+Tweet rules:
+- Open with a Telugu greeting + date, e.g. “శుభోదయం! {date}”
+- Zone alerts with 📍; include at least one Telugu phrase (“వర్షం వస్తోంది!” etc.)
+- End with a friendly Telugu sign‑off (“జాగ్రత్త!”)
+"""
+    }
+
+    template = TONE_TEMPLATES.get(tone)
+    if not template:
+        raise ValueError("Invalid tone selected.")
+
+    prompt = f"""{template.strip()}
+
+Forecast summary:
+{summary}
+
+Write tweet:"""
+
+    try:
+        response = co.generate(
+            model="command-r",
+            prompt=prompt,
+            max_tokens=150,
+            temperature=0.8,
+            stop_sequences=["\n\n"]
+        )
+        tweet = response.generations[0].text.strip()
+        return tweet[:277] + "..." if len(tweet) > 280 else tweet
+    except Exception as e:
+        print("❌ Cohere error:", e)
+        return None
 
 if __name__ == "__main__":
     main()
