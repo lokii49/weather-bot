@@ -188,7 +188,7 @@ def generate_tweet(summary, date, tone="alert"):
 Write ONE tweet (<280 chars) about the forecast below.
 
 Rules:
-- Playful headline like “Rain, rain, go a‑Hydera‑way ☔ – {date}”
+- Playful headline – {date}”
 - Mention 2‑4 zone alerts using 📍
 - Use humour or wordplay
 - End with cheeky sign‑off (e.g., “Chai‑me for updates! ☕”)
@@ -258,7 +258,10 @@ def main():
         print("✅ No alerts. Skipping.")
         return
 
-    summary = "\n\n".join(sorted(all_alerts))
+    # Take top 4 alerts only
+    alerts_for_tweet = sorted(all_alerts)[:4]
+    summary = "\n".join(alerts_for_tweet)
+
     last = load_last_summary()
     now_str = datetime.now(IST).strftime('%d %b %I:%M %p')
 
