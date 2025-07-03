@@ -88,7 +88,8 @@ def get_coordinates(city):
         return cache[city]["lat"], cache[city]["lon"]
 
     try:
-        url = f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={OWM_API_KEY}"
+        # Add `,IN` to improve accuracy
+        url = f"http://api.openweathermap.org/geo/1.0/direct?q={city},IN&limit=1&appid={OWM_API_KEY}"
         response = requests.get(url, timeout=10)
 
         if response.status_code != 200:
@@ -96,20 +97,26 @@ def get_coordinates(city):
             return None
 
         data = response.json()
-        if isinstance(data, list) and data:
-            lat, lon = data[0]["lat"], data[0]["lon"]
-            print(f"📍 {city} coords: {lat}, {lon}")
-
-            cache[city] = {"lat": lat, "lon": lon}
-            save_coords_cache(cache)
-
-            return lat, lon
-        else:
+        if not isinstance(data, list) or not data:
             print(f"⚠️ No coordinates found for {city} – Response: {data}")
             return None
 
+        lat = data[0].get("lat")
+        lon = data[0].get("lon")
+
+        if lat is None or lon is None:
+            print(f"⚠️ Missing lat/lon for {city} – Data: {data[0]}")
+            return None
+
+        print(f"📍 {city} coords: {lat}, {lon}")
+        cache[city] = {"lat": lat, "lon": lon}
+        save_coords_cache(cache)
+        return lat, lon
+
     except Exception as e:
-        print(f"❌ Coordinate lookup failed for {city}: {e}")
+        import traceback
+        print(f"❌ Exception for {city}: {type(e).__name__} - {e}")
+        traceback.print_exc()
         return None
 
 def fetch_forecast(city):
