@@ -1,4 +1,3 @@
-# [Same imports as before]
 import os, json, random, cohere
 from datetime import datetime, timedelta
 import requests, pytz
@@ -43,6 +42,7 @@ HYD_ZONES = {
     "West Hyderabad": ["Gachibowli", "Kondapur", "Madhapur", "Miyapur"],
     "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
 }
+
 
 def fetch_weatherapi(city):
     try:
@@ -110,7 +110,8 @@ def detect_alerts(city):
                                      hour.get("wind_kph", 0), int(aqi), hour.get("humidity", 60), "WeatherAPI")
                 alerts.append(alert)
                 break
-    except: pass
+    except Exception as e:
+        print(f"[WeatherAPI error for {city}]:", e)
 
     try:
         for hour in owm.get("list", []):
@@ -122,7 +123,8 @@ def detect_alerts(city):
                                      60, hour.get("main", {}).get("humidity", 60), "OpenWeather")
                 alerts.append(alert)
                 break
-    except: pass
+    except Exception as e:
+        print(f"[OpenWeather error for {city}]:", e)
 
     try:
         for hour in wb.get("data", []):
@@ -133,7 +135,8 @@ def detect_alerts(city):
                                      hour.get("wind_spd", 0) * 3.6, 55, hour.get("rh", 60), "Weatherbit")
                 alerts.append(alert)
                 break
-    except: pass
+    except Exception as e:
+        print(f"[Weatherbit error for {city}]:", e)
 
     return alerts
 
@@ -160,14 +163,15 @@ def tweet(text):
 
 def generate_tweet(summary, date, tone="alert"):
     prompt = f"""Write a tweet for Telangana weather on {date}.
-Include actual weather values like:
-📍 Zone: Rain at 3:00 PM — 26°C, 3mm (60%), 15km/h, 2km, 70%, AQI 65
+Use this format:
+📍 Zone: Rain at 3:00 PM — 26°C, 🌧️3mm (60%), 💨15km/h, 🌫️2km, 💧70%, AQI 65
 
 Start with:
 ⚠️ Weather Update – {date}
 
-Include 2‑4 zone alerts + short safety tip.
-Limit 280 characters.
+Include 2–4 zone alerts from below and a short 1-line safety tip.
+Use the real data. Do NOT make anything up.
+Limit to 280 characters.
 
 Summary:
 {summary}
@@ -175,6 +179,7 @@ Summary:
 Tweet:"""
 
     try:
+        print("\n🧠 Prompt to Cohere:\n", prompt)
         res = co.generate(
             model="command-r-plus",
             prompt=prompt,
@@ -183,7 +188,9 @@ Tweet:"""
             stop_sequences=["\n\n"]
         )
         tweet = res.generations[0].text.strip()
-        return tweet[:277] + "..." if len(tweet) > 280 else tweet
+        if len(tweet) > 280:
+            tweet = tweet.rsplit(" ", 1)[0] + "..."
+        return tweet
     except Exception as e:
         print("❌ Cohere error:", e)
         return None
@@ -197,6 +204,7 @@ def main():
         for city in cities:
             alerts = detect_alerts(city)
             if alerts:
+                print(f"✅ Alert in {city}: {alerts[0]}")
                 all_alerts.append(f"📍 {zone}: {alerts[0]}")
                 break
 
@@ -205,6 +213,8 @@ def main():
         return
 
     summary = "\n".join(sorted(all_alerts)[:4])
+    print("\n🔎 Summary used for tweet:\n", summary)
+
     last = load_last_summary()
     now_str = datetime.now(IST).strftime('%d %b %I:%M %p')
 
