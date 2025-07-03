@@ -161,18 +161,34 @@ def tweet(text):
         print("❌ Tweet error:", e)
 
 def generate_tweet(summary, date, tone="alert"):
-    prompt = f"""Write a concise tweet about Telangana weather on {date}.
+    # Optional: Add few-shot example to guide formatting
+    example = f"""Example:
+Summaries:
+📍 West Telangana: Heavy rain at 02:00 PM — 24.0°C, 🌧️3.4mm (95%), 💨33km/h, 🌫️7.0km, 💧85%, AQI 32 [WeatherAPI]
+📍 South Hyderabad: Light rain at 02:00 PM — 27.2°C, 🌧️1.2mm (89%), 💨20km/h, 🌫️9.0km, 💧78%, AQI 21 [WeatherAPI]
+
+Tweet:
+⚠️ Weather Update – 02 Jul 02:00 PM
+📍 West Telangana: Heavy rain at 02:00 PM — 24.0°C, 🌧️3.4mm (95%), 💨33km/h, 🌫️7.0km, 💧85%, AQI 32 [WeatherAPI]
+📍 South Hyderabad: Light rain at 02:00 PM — 27.2°C, 🌧️1.2mm (89%), 💨20km/h, 🌫️9.0km, 💧78%, AQI 21 [WeatherAPI]
+⚠️ Drive cautiously. Roads may be slippery.
+"""
+
+    prompt = f"""{example}
+
+Now write a concise tweet about Telangana weather on {date}.
 Format:
 ⚠️ Weather Update – {date}
 📍 Zone: Condition at Time — Temp°C, 🌧️Rain (Prob%), 💨Wind, 🌫️Vis, 💧Humidity, AQI [Source]
 
-Use only real data from below. Include 2–4 zones. Add a 1-line safety tip at the end. Do NOT invent anything.
-Limit to 280 characters max.
+Use only real data from below. Include 2–4 zones. End with a 1-line safety tip. Max 280 characters. Do NOT invent anything.
 
 Summaries:
 {summary}
 
-Tweet:"""
+Tweet:
+⚠️ Weather Update – {date}
+"""
 
     try:
         print("\n🧠 Prompt to Cohere:\n", prompt)
@@ -190,16 +206,16 @@ Tweet:"""
         print("\n📢 Raw Cohere Response:\n", tweet)
         print(f"\n📏 Generated tweet length: {len(tweet)}")
 
-        # Remove any "Tweet:" prefix
+        # Sanitize if extra prefix
         if tweet.lower().startswith("tweet:"):
             tweet = tweet.split(":", 1)[1].strip()
 
-        # Validation: too short or missing zones
+        # Ensure we got something useful
         if len(tweet) < 100 or "📍" not in tweet:
             print("⚠️ Tweet too short or missing alerts. Skipping.")
             return None
 
-        # Trim if slightly over
+        # Trim if just slightly over
         if len(tweet) > 280:
             tweet = tweet[:277] + "..."
 
