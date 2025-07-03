@@ -75,21 +75,6 @@ def fetch_openweather(city):
     except:
         return None
 
-def fetch_weatherbit(city):
-    try:
-        geo = requests.get(f"http://api.openweathermap.org/geo/1.0/direct?q={city},Telangana,IN&limit=1&appid={OPENWEATHER_KEY}").json()
-        if not geo: return None
-        lat, lon = geo[0]['lat'], geo[0]['lon']
-        res = requests.get("https://api.weatherbit.io/v2.0/forecast/hourly", params={
-            "lat": lat,
-            "lon": lon,y
-            "key": WEATHERBIT_KEY,
-            "hours": 12
-        }, timeout=10)
-        return res.json() if res.status_code == 200 else None
-    except:
-        return None
-
 def fetch_weatherapi(city):
     try:
         res = requests.get("http://api.weatherapi.com/v1/forecast.json", params={
