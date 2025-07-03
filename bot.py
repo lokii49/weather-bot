@@ -41,7 +41,7 @@ BASE_CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather?q={}&appid={
 
 def get_coordinates(city):
     try:
-        url = f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={OWM_API_KEY}"
+        url = f"http://api.openweathermap.org/geo/1.0/direct?q={city},Telangana,IN&limit=1&appid={OWM_API_KEY}"
         r = requests.get(url, timeout=10).json()
         if r:
             print(f"📍 {city} coords: {r[0]['lat']}, {r[0]['lon']}")
