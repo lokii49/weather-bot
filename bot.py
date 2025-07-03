@@ -35,22 +35,81 @@ client = tweepy.Client(
 OWM_API_KEY = os.getenv("OWM_API_KEY")
 WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
 WEATHERBIT_API_KEY = os.getenv("WEATHERBIT_KEY")
+GIST_ID = os.environ["GIST_ID"]
+GITHUB_TOKEN = os.environ["GIST_TOKEN"]
+GIST_FILENAME = "coords_cache.json"
 
 BASE_FORECAST_URL = "https://api.openweathermap.org/data/2.5/onecall?lat={}&lon={}&exclude=minutely&appid={}&units=metric"
 BASE_CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather?q={}&appid={}&units=metric"
 
+def load_coords_cache():
+    url = f"https://api.github.com/gists/{GIST_ID}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    response = requests.get(url, headers=headers)
+
+    if response.status_code != 200:
+        print(f"❌ Failed to fetch gist: {response.status_code}")
+        return {}
+
+    gist_data = response.json()
+    files = gist_data.get("files", {})
+
+    if GIST_FILENAME in files:
+        try:
+            return json.loads(files[GIST_FILENAME]["content"])
+        except json.JSONDecodeError:
+            print("⚠️ Cache file exists but is not valid JSON — resetting.")
+            return {}
+    else:
+        # Create empty file in Gist
+        print(f"📄 Cache file '{GIST_FILENAME}' not found in Gist — creating it.")
+        save_coords_cache({})
+        return {}
+
+def save_coords_cache(data):
+    url = f"https://api.github.com/gists/{GIST_ID}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    payload = {
+        "files": {
+            GIST_FILENAME: {
+                "content": json.dumps(data, indent=2)
+            }
+        }
+    }
+    response = requests.patch(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        print("✅ Cache saved to Gist")
+    else:
+        print(f"❌ Failed to save cache: {response.status_code}")
+
 def get_coordinates(city):
+    cache = load_coords_cache()
+    if city in cache:
+        return cache[city]["lat"], cache[city]["lon"]
+
     try:
-        url = f"http://api.openweathermap.org/geo/1.0/direct?q={city},Telangana,IN&limit=1&appid={OWM_API_KEY}"
-        r = requests.get(url, timeout=10).json()
-        if r:
-            print(f"📍 {city} coords: {r[0]['lat']}, {r[0]['lon']}")
-            return r[0]["lat"], r[0]["lon"]
-        else:
-            print(f"⚠️ No coordinates found for {city}")
+        url = f"http://api.openweathermap.org/geo/1.0/direct?q={city}&limit=1&appid={OWM_API_KEY}"
+        response = requests.get(url, timeout=10)
+
+        if response.status_code != 200:
+            print(f"❌ Failed to fetch coordinates for {city}: HTTP {response.status_code}")
             return None
+
+        data = response.json()
+        if isinstance(data, list) and data:
+            lat, lon = data[0]["lat"], data[0]["lon"]
+            print(f"📍 {city} coords: {lat}, {lon}")
+
+            cache[city] = {"lat": lat, "lon": lon}
+            save_coords_cache(cache)
+
+            return lat, lon
+        else:
+            print(f"⚠️ No coordinates found for {city} – Response: {data}")
+            return None
+
     except Exception as e:
-        print(f"❌ Coordinate lookup failed for {city}:", e)
+        print(f"❌ Coordinate lookup failed for {city}: {e}")
         return None
 
 def fetch_forecast(city):
