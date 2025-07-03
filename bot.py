@@ -32,7 +32,7 @@ client = tweepy.Client(
     access_token_secret=os.getenv("ACCESS_SECRET")
 )
 
-OWM_API_KEY = os.getenv("OWM_API_KEY")
+OWM_API_KEY = os.getenv("OPENWEATHER_KEY")
 WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
 WEATHERBIT_API_KEY = os.getenv("WEATHERBIT_KEY")
 GIST_ID = os.environ["GIST_ID"]
