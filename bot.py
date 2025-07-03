@@ -82,7 +82,7 @@ def fetch_weatherbit(city):
         lat, lon = geo[0]['lat'], geo[0]['lon']
         res = requests.get("https://api.weatherbit.io/v2.0/forecast/hourly", params={
             "lat": lat,
-            "lon": lon,
+            "lon": lon,y
             "key": WEATHERBIT_KEY,
             "hours": 12
         }, timeout=10)
@@ -90,6 +90,23 @@ def fetch_weatherbit(city):
     except:
         return None
 
+def fetch_weatherapi(city):
+    try:
+        res = requests.get("http://api.weatherapi.com/v1/forecast.json", params={
+            "key": WEATHERAPI_KEY,
+            "q": f"{city},Telangana,India",
+            "days": 1,
+            "aqi": "yes",
+            "alerts": "no"
+        }, timeout=10)
+        if res.status_code != 200:
+            print(f"❌ WeatherAPI error ({res.status_code}) for {city}")
+            return None
+        return res.json()
+    except Exception as e:
+        print(f"[WeatherAPI fatal error for {city}]:", e)
+        return None
+        
 def detect_alerts(city):
     now = datetime.now(IST)
     cutoff = now + timedelta(hours=9)
