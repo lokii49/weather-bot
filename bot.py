@@ -161,34 +161,18 @@ def tweet(text):
         print("❌ Tweet error:", e)
 
 def generate_tweet(summary, date, tone="alert"):
-    # Optional: Add few-shot example to guide formatting
-    example = f"""Example:
-Summaries:
-📍 West Telangana: Heavy rain at 02:00 PM — 24.0°C, 🌧️3.4mm (95%), 💨33km/h, 🌫️7.0km, 💧85%, AQI 32 [WeatherAPI]
-📍 South Hyderabad: Light rain at 02:00 PM — 27.2°C, 🌧️1.2mm (89%), 💨20km/h, 🌫️9.0km, 💧78%, AQI 21 [WeatherAPI]
-
-Tweet:
-⚠️ Weather Update – 02 Jul 02:00 PM
-📍 West Telangana: Heavy rain at 02:00 PM — 24.0°C, 🌧️3.4mm (95%), 💨33km/h, 🌫️7.0km, 💧85%, AQI 32 [WeatherAPI]
-📍 South Hyderabad: Light rain at 02:00 PM — 27.2°C, 🌧️1.2mm (89%), 💨20km/h, 🌫️9.0km, 💧78%, AQI 21 [WeatherAPI]
-⚠️ Drive cautiously. Roads may be slippery.
-"""
-
-    prompt = f"""{example}
-
-Now write a concise tweet about Telangana weather on {date}.
+    prompt = f"""Write a concise tweet about Telangana weather on {date}.
 Format:
 ⚠️ Weather Update – {date}
-📍 Zone: Condition at Time — Temp°C, 🌧️Rain (Prob%), 💨Wind, 🌫️Vis, 💧Humidity, AQI [Source]
-
-Use only real data from below. Include 2–4 zones. End with a 1-line safety tip. Max 280 characters. Do NOT invent anything.
+📍 Zone: Condition — Temp°C, 🌧️Rain (Prob%), 💨Wind, AQI [Source]
+Keep each line short. Use max 3 zones. End with a 1-line safety tip.
+Do NOT invent anything. Use only the summaries below.
+Limit to 280 characters max.
 
 Summaries:
 {summary}
 
-Tweet:
-⚠️ Weather Update – {date}
-"""
+Tweet:"""
 
     try:
         print("\n🧠 Prompt to Cohere:\n", prompt)
@@ -202,29 +186,42 @@ Tweet:
         )
 
         tweet = res.generations[0].text.strip()
-
         print("\n📢 Raw Cohere Response:\n", tweet)
         print(f"\n📏 Generated tweet length: {len(tweet)}")
 
-        # Sanitize if extra prefix
         if tweet.lower().startswith("tweet:"):
             tweet = tweet.split(":", 1)[1].strip()
 
-        # Ensure we got something useful
-        if len(tweet) < 100 or "📍" not in tweet:
+        if "📍" not in tweet or len(tweet) < 100:
             print("⚠️ Tweet too short or missing alerts. Skipping.")
             return None
 
-        # Trim if just slightly over
+        # ✂️ Trim tweet down to <= 280 characters safely
         if len(tweet) > 280:
-            tweet = tweet[:277] + "..."
+            print("⚠️ Tweet too long, trimming...")
+
+            lines = tweet.strip().splitlines()
+            header = lines[0]
+            entries = [l for l in lines[1:] if l.startswith("📍")]
+            tip = next((l for l in lines if not l.startswith("📍") and not l.startswith("⚠️")), "☔ Stay safe.")
+
+            trimmed = [header]
+            total_len = len(header) + len(tip) + 2  # +2 for newlines
+
+            for entry in entries:
+                if total_len + len(entry) + 1 <= 275:
+                    trimmed.append(entry)
+                    total_len += len(entry) + 1
+
+            trimmed.append(tip if len(tip) <= 60 else "☔ Roads may be slick.")
+            tweet = "\n".join(trimmed)
+            print(f"📏 Trimmed tweet length: {len(tweet)}")
 
         return tweet
 
     except Exception as e:
         print("❌ Cohere error:", e)
         return None
-
 def main():
     print("📡 Fetching alerts...")
     all_alerts = []
