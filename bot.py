@@ -161,44 +161,47 @@ def tweet(text):
         print("❌ Tweet error:", e)
 
 def generate_tweet(summary, date, tone="alert"):
-    prompt = f"""Write a tweet for Telangana weather on {date}.
-Use this format:
-📍 Zone: Rain at 3:00 PM — 26°C, 🌧️3mm (60%), 💨15km/h, 🌫️2km, 💧70%, AQI 65
-
-Start with:
+    prompt = f"""Write a concise tweet about Telangana weather on {date}.
+Format:
 ⚠️ Weather Update – {date}
+📍 Zone: Condition at Time — Temp°C, 🌧️Rain (Prob%), 💨Wind, 🌫️Vis, 💧Humidity, AQI [Source]
 
-Include 2–4 zone alerts from below and a short 1-line safety tip.
-Use the real data. Do NOT make anything up.
-Limit to 280 characters.
+Use only real data from below. Include 2–4 zones. Add a 1-line safety tip at the end. Do NOT invent anything.
+Limit to 280 characters max.
 
-Summary:
+Summaries:
 {summary}
 
 Tweet:"""
 
     try:
         print("\n🧠 Prompt to Cohere:\n", prompt)
+
         res = co.generate(
             model="command-r-plus",
             prompt=prompt,
-            max_tokens=180,
+            max_tokens=300,
             temperature=0.5,
             stop_sequences=["\n\n"]
         )
+
         tweet = res.generations[0].text.strip()
+
         print("\n📢 Raw Cohere Response:\n", tweet)
-        print("\n📏 Generated tweet length:", len(tweet))
+        print(f"\n📏 Generated tweet length: {len(tweet)}")
 
-        if tweet.startswith("Tweet:"):
-            tweet = tweet.replace("Tweet:", "").strip()
+        # Remove any "Tweet:" prefix
+        if tweet.lower().startswith("tweet:"):
+            tweet = tweet.split(":", 1)[1].strip()
 
+        # Validation: too short or missing zones
+        if len(tweet) < 100 or "📍" not in tweet:
+            print("⚠️ Tweet too short or missing alerts. Skipping.")
+            return None
+
+        # Trim if slightly over
         if len(tweet) > 280:
             tweet = tweet[:277] + "..."
-
-        if not tweet or len(tweet) < 30:
-            print("⚠️ Generated tweet is too short or invalid.")
-            return None
 
         return tweet
 
