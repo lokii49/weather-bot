@@ -225,7 +225,7 @@ def get_time_of_day(dt_unix):
     if 18 <= hour <= 20: return "evening"
     return "night"
 
-def is_significant_forecast_all(forecasts):
+def is_significant_forecast(forecasts):
     alerts, seen = [], set()
     
     def check_and_add(condition, label, time_phrase):
