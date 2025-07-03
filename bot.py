@@ -191,17 +191,30 @@ Tweet:"""
         res = co.generate(
             model="command-r-plus",
             prompt=prompt,
-            max_tokens=150,
-            temperature=0.7,
+            max_tokens=180,
+            temperature=0.5,
             stop_sequences=["\n\n"]
         )
         tweet = res.generations[0].text.strip()
+        print("\n📢 Raw Cohere Response:\n", tweet)
+
+        # Clean up and trim if too long
+        if tweet.startswith("Tweet:"):
+            tweet = tweet.replace("Tweet:", "").strip()
+
         if len(tweet) > 280:
-            tweet = tweet.rsplit(" ", 1)[0] + "..."
+            tweet = tweet[:277] + "..."
+
+        if not tweet or len(tweet) < 30:
+            print("⚠️ Generated tweet is too short or invalid.")
+            return None
+
         return tweet
+
     except Exception as e:
         print("❌ Cohere error:", e)
         return None
+
 
 def main():
     print("📡 Fetching alerts...")
@@ -231,11 +244,12 @@ def main():
         return
 
     tweet_text = generate_tweet(summary, now_str)
-    print("\n📢 Generated Tweet:\n", tweet_text or "⚠️ Failed to generate tweet.")
 
     if tweet_text:
         tweet(tweet_text)
         save_summary({"summary": summary, "timestamp": datetime.now(IST).isoformat()})
+    else:
+        print("⚠️ Tweet generation failed. Skipping post.")
 
 if __name__ == "__main__":
     main()
