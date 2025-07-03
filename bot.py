@@ -243,7 +243,12 @@ def main():
     summary = "\n".join(sorted(all_alerts)[:4])
     print("\n🧾 Summary passed to tweet generator:\n", summary)
 
+    last = load_last_summary()
     now_str = datetime.now(IST).strftime('%d %b %I:%M %p')
+
+    if last.get("summary") == summary:
+        print("⏳ No new alert.")
+        return
 
     if not summary or len(summary.strip()) < 30:
         print("⚠️ Summary too short. Skipping generation.")
@@ -258,11 +263,9 @@ def main():
             return
 
         tweet(tweet_text)
-
-        # Save even if it's a duplicate
         save_summary({"summary": summary, "timestamp": datetime.now(IST).isoformat()})
     else:
         print("⚠️ Tweet generation failed. Skipping post.")
-
+        
 if __name__ == "__main__":
     main()
