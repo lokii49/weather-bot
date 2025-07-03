@@ -43,26 +43,17 @@ HYD_ZONES = {
     "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
 }
 
-
-def fetch_weatherbit(city):
+def fetch_weatherapi(city):
     try:
-        geo = requests.get(f"http://api.openweathermap.org/geo/1.0/direct?q={city},Telangana,IN&limit=1&appid={OPENWEATHER_KEY}").json()
-        if not geo:
-            print(f"❌ Geolocation failed for {city}")
-            return None
-        lat, lon = geo[0]['lat'], geo[0]['lon']
-        res = requests.get("https://api.weatherbit.io/v2.0/forecast/hourly", params={
-            "lat": lat,
-            "lon": lon,
-            "key": WEATHERBIT_KEY,
-            "hours": 12
+        res = requests.get(f"http://api.weatherapi.com/v1/forecast.json", params={
+            "key": WEATHERAPI_KEY,
+            "q": f"{city},Telangana",
+            "days": 1,
+            "aqi": "yes",
+            "alerts": "no"
         }, timeout=10)
-        if res.status_code != 200:
-            print(f"❌ Weatherbit API error ({res.status_code}) for {city}")
-            return None
-        return res.json()
-    except Exception as e:
-        print(f"[Weatherbit fatal error for {city}]:", e)
+        return res.json() if res.status_code == 200 else None
+    except:
         return None
 
 def fetch_openweather(city):
@@ -75,23 +66,21 @@ def fetch_openweather(city):
     except:
         return None
 
-def fetch_weatherapi(city):
+def fetch_weatherbit(city):
     try:
-        res = requests.get("http://api.weatherapi.com/v1/forecast.json", params={
-            "key": WEATHERAPI_KEY,
-            "q": f"{city},Telangana,India",
-            "days": 1,
-            "aqi": "yes",
-            "alerts": "no"
+        geo = requests.get(f"http://api.openweathermap.org/geo/1.0/direct?q={city},Telangana,IN&limit=1&appid={OPENWEATHER_KEY}").json()
+        if not geo: return None
+        lat, lon = geo[0]['lat'], geo[0]['lon']
+        res = requests.get("https://api.weatherbit.io/v2.0/forecast/hourly", params={
+            "lat": lat,
+            "lon": lon,
+            "key": WEATHERBIT_KEY,
+            "hours": 12
         }, timeout=10)
-        if res.status_code != 200:
-            print(f"❌ WeatherAPI error ({res.status_code}) for {city}")
-            return None
-        return res.json()
-    except Exception as e:
-        print(f"[WeatherAPI fatal error for {city}]:", e)
+        return res.json() if res.status_code == 200 else None
+    except:
         return None
-        
+
 def detect_alerts(city):
     now = datetime.now(IST)
     cutoff = now + timedelta(hours=9)
@@ -199,8 +188,8 @@ Tweet:"""
         )
         tweet = res.generations[0].text.strip()
         print("\n📢 Raw Cohere Response:\n", tweet)
+        print("\n📏 Generated tweet length:", len(tweet))
 
-        # Clean up and trim if too long
         if tweet.startswith("Tweet:"):
             tweet = tweet.replace("Tweet:", "").strip()
 
@@ -216,7 +205,6 @@ Tweet:"""
     except Exception as e:
         print("❌ Cohere error:", e)
         return None
-
 
 def main():
     print("📡 Fetching alerts...")
@@ -236,7 +224,7 @@ def main():
         return
 
     summary = "\n".join(sorted(all_alerts)[:4])
-    print("\n🔎 Summary used for tweet:\n", summary)
+    print("\n🧾 Summary passed to tweet generator:\n", summary)
 
     last = load_last_summary()
     now_str = datetime.now(IST).strftime('%d %b %I:%M %p')
@@ -245,9 +233,18 @@ def main():
         print("⏳ No new alert.")
         return
 
+    if not summary or len(summary.strip()) < 30:
+        print("⚠️ Summary too short. Skipping generation.")
+        return
+
     tweet_text = generate_tweet(summary, now_str)
 
     if tweet_text:
+        lines = tweet_text.strip().splitlines()
+        if len(lines) < 2 or len(tweet_text.strip()) < 50:
+            print("⚠️ Tweet too short or missing alerts. Skipping.")
+            return
+
         tweet(tweet_text)
         save_summary({"summary": summary, "timestamp": datetime.now(IST).isoformat()})
     else:
