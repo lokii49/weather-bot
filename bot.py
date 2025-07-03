@@ -277,7 +277,7 @@ def prepare_zone_alerts(zones):
     zone_alerts = {}
     for zone, cities in zones.items():
         for city in cities:
-            forecast = fetch_forecast(city)
+            forecast = fetch_all_forecasts(city)
             if not forecast:
                 continue
             alerts = is_significant_forecast(forecast)
@@ -296,18 +296,19 @@ def format_zone_summary(zone_alerts):
     return "\n".join(lines)
 
 def generate_ai_tweet(summary_text, date_str):
+    bullet_summary = "\n".join([f"- {line}" for line in summary_text.splitlines() if line.strip()])
     prompt = f"""
-You're a friendly Indian weather bot. Based on the forecast summary below, write 1 tweet.
+You're a friendly Indian weather bot. Based on the forecast summary below, write a tweet.
 
-Tweet requirements:
-- Under 280 characters
+Requirements:
+- Max 280 characters
 - Start with emoji headline like: "🌦️ Telangana Weather Update – {date_str}"
-- Include a few zones with 📍 and short alerts (e.g., "📍 North Telangana: 🌧️ Rain in morning")
-- End with a friendly tip like "Stay safe!" or "Carry an umbrella! ☂️"
+- Use 📍 to prefix zones (e.g., "📍 North Telangana: 🌧️ Rain in morning")
+- End with a friendly sign-off like "Stay safe!" or "Carry an umbrella! ☂️"
 - No hashtags
 
 Forecast summary:
-\"\"\"{summary_text}\"\"\"
+{bullet_summary}
 
 Tweet:
 """
