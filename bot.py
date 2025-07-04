@@ -24,13 +24,14 @@ HYD_ZONES = {
     "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
 }
 
-client = tweepy.Client(
-    bearer_token=os.getenv("BEARER_TOKEN"),
+auth = tweepy.OAuth1UserHandler(
     consumer_key=os.getenv("API_KEY"),
     consumer_secret=os.getenv("API_SECRET"),
     access_token=os.getenv("ACCESS_TOKEN"),
     access_token_secret=os.getenv("ACCESS_SECRET")
 )
+
+client = tweepy.API(auth)
 
 OWM_API_KEY = os.getenv("OPENWEATHER_KEY")
 WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
@@ -372,8 +373,9 @@ def tweet_weather():
         tweet_text = generate_ai_tweet(summary_text, date_str)
         if tweet_text:
             try:
-                res = client.create_tweet(text=tweet_text)
-                print("✅ Weather alert tweet posted! Tweet ID:", res.data["id"])
+                status = client.update_status(tweet_text)
+                print(f"✅ Weather alert tweet posted! Tweet ID: {status.id}")
+
             except tweepy.TooManyRequests:
                 print("❌ Rate limit hit.")
             except Exception as e:
@@ -385,7 +387,7 @@ def tweet_weather():
         tweet_text = generate_pleasant_weather_tweet(date_str, current_summary)
         if tweet_text:
             try:
-                res = client.create_tweet(text=tweet_text)
+                status = client.update_status(tweet_text)
                 print("✅ Pleasant weather tweet posted! Tweet ID:", res.data["id"])
             except tweepy.TooManyRequests:
                 print("❌ Rate limit hit while tweeting pleasant weather.")
