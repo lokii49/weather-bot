@@ -36,7 +36,7 @@ OWM_API_KEY = os.getenv("OPENWEATHER_KEY")
 WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
 WEATHERBIT_API_KEY = os.getenv("WEATHERBIT_KEY")
 GIST_ID = os.environ["GIST_ID"]
-GITHUB_TOKEN = os.environ["GIST_TOKEN"]
+GIST_TOKEN = os.environ["GIST_TOKEN"]
 GIST_FILENAME = "coords_cache.json"
 
 BASE_FORECAST_URL = "https://api.openweathermap.org/data/2.5/onecall?lat={}&lon={}&exclude=minutely&appid={}&units=metric"
@@ -68,7 +68,7 @@ def load_coords_cache():
 
 def save_coords_cache(data):
     url = f"https://api.github.com/gists/{GIST_ID}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    headers = {"Authorization": f"token {GIST_TOKEN}"}
     payload = {
         "files": {
             GIST_FILENAME: {
@@ -287,6 +287,43 @@ def prepare_zone_alerts(zones):
                 break
     return zone_alerts
 
+LAST_TWEET_FILENAME = "last_tweet.json"
+
+def load_last_tweet():
+    url = f"https://api.github.com/gists/{GIST_ID}"
+    headers = {"Authorization": f"token {GIST_TOKEN}"}
+    response = requests.get(url, headers=headers)
+
+    if response.status_code != 200:
+        print("⚠️ Couldn't fetch last tweet file")
+        return None
+
+    gist_data = response.json()
+    files = gist_data.get("files", {})
+    if LAST_TWEET_FILENAME in files:
+        try:
+            return json.loads(files[LAST_TWEET_FILENAME]["content"])
+        except Exception as e:
+            print("⚠️ Could not parse last tweet:", e)
+    return None
+
+def save_last_tweet(tweet_text):
+    url = f"https://api.github.com/gists/{GIST_ID}"
+    headers = {"Authorization": f"token {GIST_TOKEN}"}
+    payload = {
+        "files": {
+            LAST_TWEET_FILENAME: {
+                "content": json.dumps({"text": tweet_text})
+            }
+        }
+    }
+    response = requests.patch(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        print("✅ Last tweet saved to Gist")
+    else:
+        print("❌ Failed to save last tweet")
+
+
 def format_zone_summary(zone_alerts):
     lines = []
     for zone, alert in zone_alerts.items():
@@ -408,16 +445,25 @@ def tweet_weather():
     current_weather_data = fetch_current_weather("Hyderabad")
     current_summary = summarize_current_weather(current_weather_data)
 
+    last_tweet = load_last_tweet()
+    previous_text = last_tweet["text"] if last_tweet else None
+
     if combined_alerts:
         summary_text = format_zone_summary(combined_alerts)
         if current_summary:
             summary_text = f"Current weather – {current_summary}\n\n" + summary_text
 
         tweet_text = generate_ai_tweet(summary_text, date_str)
+
         if tweet_text:
+            if tweet_text == previous_text:
+                print("⏭️ Duplicate tweet detected – skipping post.")
+                return
+
             try:
                 res = client.create_tweet(text=tweet_text)
                 print("✅ Weather alert tweet posted! Tweet ID:", res.data["id"])
+                save_last_tweet(tweet_text)
             except tweepy.TooManyRequests:
                 print("❌ Rate limit hit.")
             except Exception as e:
@@ -427,10 +473,16 @@ def tweet_weather():
     else:
         print("ℹ️ No alerts found – tweeting a pleasant weather update.")
         tweet_text = generate_pleasant_weather_tweet(date_str, current_summary)
+
         if tweet_text:
+            if tweet_text == previous_text:
+                print("⏭️ Duplicate pleasant tweet – skipping.")
+                return
+
             try:
                 res = client.create_tweet(text=tweet_text)
                 print("✅ Pleasant weather tweet posted! Tweet ID:", res.data["id"])
+                save_last_tweet(tweet_text)
             except tweepy.TooManyRequests:
                 print("❌ Rate limit hit while tweeting pleasant weather.")
             except Exception as e:
