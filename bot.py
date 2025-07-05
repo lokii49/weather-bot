@@ -295,8 +295,6 @@ def format_zone_summary(zone_alerts):
         lines.append(f"{zone}: {alert}")
     return "\n".join(lines)
 
-import random
-
 AI_TWEET_STYLES = {
     "friendly": """
 You're a friendly Indian weather bot. Based on the forecast summary below, write a tweet.
