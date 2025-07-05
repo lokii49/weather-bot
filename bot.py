@@ -44,7 +44,7 @@ BASE_CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather?q={}&appid={
 
 def load_coords_cache():
     url = f"https://api.github.com/gists/{GIST_ID}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    headers = {"Authorization": f"token {GIST_TOKEN}"}
     response = requests.get(url, headers=headers)
 
     if response.status_code != 200:
