@@ -36,7 +36,7 @@ OWM_API_KEY = os.getenv("OPENWEATHER_KEY")
 WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
 WEATHERBIT_API_KEY = os.getenv("WEATHERBIT_KEY")
 GIST_ID = os.environ["GIST_ID"]
-GITHUB_TOKEN = os.environ["GIST_TOKEN"]
+GIST_TOKEN = os.environ["GIST_TOKEN"]
 GIST_FILENAME = "coords_cache.json"
 
 BASE_FORECAST_URL = "https://api.openweathermap.org/data/2.5/onecall?lat={}&lon={}&exclude=minutely&appid={}&units=metric"
@@ -44,7 +44,7 @@ BASE_CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather?q={}&appid={
 
 def load_coords_cache():
     url = f"https://api.github.com/gists/{GIST_ID}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    headers = {"Authorization": f"token {GIST_TOKEN}"}
     response = requests.get(url, headers=headers)
 
     if response.status_code != 200:
@@ -68,7 +68,7 @@ def load_coords_cache():
 
 def save_coords_cache(data):
     url = f"https://api.github.com/gists/{GIST_ID}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    headers = {"Authorization": f"token {GIST_TOKEN}"}
     payload = {
         "files": {
             GIST_FILENAME: {
@@ -291,7 +291,7 @@ LAST_TWEET_FILENAME = "last_tweet.json"
 
 def load_last_tweet():
     url = f"https://api.github.com/gists/{GIST_ID}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    headers = {"Authorization": f"token {GIST_TOKEN}"}
     response = requests.get(url, headers=headers)
 
     if response.status_code != 200:
@@ -309,7 +309,7 @@ def load_last_tweet():
 
 def save_last_tweet(tweet_text):
     url = f"https://api.github.com/gists/{GIST_ID}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    headers = {"Authorization": f"token {GIST_TOKEN}"}
     payload = {
         "files": {
             LAST_TWEET_FILENAME: {
