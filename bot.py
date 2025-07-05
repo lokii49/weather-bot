@@ -295,27 +295,73 @@ def format_zone_summary(zone_alerts):
         lines.append(f"{zone}: {alert}")
     return "\n".join(lines)
 
-def generate_ai_tweet(summary_text, date_str):
-    bullet_summary = "\n".join([f"- {line}" for line in summary_text.splitlines() if line.strip()])
-    prompt = f"""
+import random
+
+AI_TWEET_STYLES = {
+    "friendly": """
 You're a friendly Indian weather bot. Based on the forecast summary below, write a tweet.
 
 Requirements:
 - Max 280 characters
-- Start with emoji headline like: "🌦️ Telangana Weather Update – {date_str}"
+- Start with emoji headline like: "🌦️ Weather Update"
 - Use 📍 to prefix zones (e.g., "📍 North Telangana: 🌧️ Rain in morning")
 - End with a friendly sign-off like "Stay safe!" or "Carry an umbrella! ☂️"
 - No hashtags
+""",
+    "rhyming": """
+You're a poetic Indian weather bot. Summarize the forecast in a lightly rhyming tweet.
+
+Requirements:
+- Max 280 characters
+- Start with emoji headline like: "🌤️ Sky's Tale"
+- Use 📍 to prefix zones
+- End with a rhyming friendly sign-off like "Pack your gear, cheer’s near!" or "Keep dry, don’t cry!"
+- No hashtags
+""",
+    "quirky": """
+You're a quirky, humorous Indian weather bot. Create a tweet with casual tone and playful emoji use.
+
+Requirements:
+- Max 280 characters
+- Start with something fun like: "🌈 Cloudy vibes"
+- Use 📍 before zones
+- End with something playful like "Duck if it drizzles!" or "Snack indoors, it pours!"
+- No hashtags
+""",
+    "news": """
+You're a serious Indian weather reporter. Write a crisp, informative tweet for today’s weather forecast.
+
+Requirements:
+- Max 280 characters
+- Start with 📰 or 📢 and a headline like: "📰 Telangana Weather"
+- Use 📍 to prefix zones
+- Sign off like "Details may evolve. Stay updated."
+- No hashtags or jokes
+"""
+}
+
+def generate_ai_tweet(summary_text, date_str):
+    bullet_summary = "\n".join(
+        [f"- {line}" for line in summary_text.splitlines() if line.strip()]
+    )
+
+    style_key = random.choice(list(AI_TWEET_STYLES.keys()))
+    style_prompt = AI_TWEET_STYLES[style_key].strip().format(date=date_str)
+
+    prompt = f"""{style_prompt}
 
 Forecast summary:
 {bullet_summary}
 
 Tweet:
 """
+
+    print(f"🧠 Using style: {style_key}")
+
     try:
         response = cohere_client.generate(
             model="command-r-plus",
-            prompt=prompt.strip(),
+            prompt=prompt,
             max_tokens=280,
             temperature=0.7,
             stop_sequences=["--"]
@@ -331,7 +377,7 @@ def generate_pleasant_weather_tweet(date_str, current_weather=None):
 You're a friendly Indian weather bot. Today’s weather in Telangana is calm.
 
 Write 1 cheerful tweet:
-- Start with emoji headline: “🌤️ Telangana Weather Update – {date_str}”
+- Start with emoji headline: “🌤️ Weather Update”
 - Mention no major events expected
 - Optionally include: "{current_weather}"
 - End with a warm sign-off like “Enjoy your day!”
