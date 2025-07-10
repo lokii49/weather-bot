@@ -227,11 +227,7 @@ def get_time_of_day(dt_unix):
 
 def is_significant_forecast(forecasts):
     alerts, seen = [], set()
-    now_ist = datetime.now(pytz.timezone("Asia/Kolkata"))
-
-    def is_after_11am(timestamp):
-        ts_hour = datetime.fromtimestamp(timestamp, pytz.timezone("Asia/Kolkata")).hour
-        return ts_hour >= 11 or datetime.fromtimestamp(timestamp, pytz.timezone("Asia/Kolkata")).date() > now_ist.date()
+    now = datetime.now(pytz.timezone("Asia/Kolkata")).timestamp()
 
     def check_and_add(condition, label, time_phrase):
         if condition and label not in seen:
@@ -243,10 +239,10 @@ def is_significant_forecast(forecasts):
             continue
 
         if source == "owm":
-            hours = forecast.get("hourly", [])[:24]
+            hours = forecast.get("hourly", [])
             for hour in hours:
-                if not is_after_11am(hour["dt"]):
-                    continue
+                if hour["dt"] < now:
+                    continue  # skip past forecast
                 desc = hour["weather"][0]["description"].lower()
                 temp = hour["temp"]
                 pop = hour.get("pop", 0)
@@ -257,13 +253,13 @@ def is_significant_forecast(forecasts):
 
         elif source == "weatherbit":
             for hour in forecast["data"]:
-                ts = datetime.fromisoformat(hour["timestamp_local"]).timestamp()
-                if not is_after_11am(ts):
+                dt = datetime.fromisoformat(hour["timestamp_local"]).astimezone(pytz.timezone("Asia/Kolkata"))
+                if dt.timestamp() < now:
                     continue
                 desc = hour["weather"]["description"].lower()
                 temp = hour["temp"]
                 pop = hour.get("pop", 0)
-                time_phrase = get_time_of_day(ts)
+                time_phrase = get_time_of_day(dt.timestamp())
                 check_and_add("rain" in desc or pop >= 10, "🌧️ Rain", time_phrase)
                 check_and_add(temp >= 40, "🔥 Heat", time_phrase)
                 check_and_add(temp <= 20, "❄️ Cold", time_phrase)
@@ -272,12 +268,12 @@ def is_significant_forecast(forecasts):
             try:
                 hours = forecast["forecast"]["forecastday"][0]["hour"]
                 for hour in hours:
-                    ts = datetime.strptime(hour["time"], "%Y-%m-%d %H:%M").timestamp()
-                    if not is_after_11am(ts):
+                    dt = datetime.strptime(hour["time"], "%Y-%m-%d %H:%M").astimezone(pytz.timezone("Asia/Kolkata"))
+                    if dt.timestamp() < now:
                         continue
                     desc = hour["condition"]["text"].lower()
                     temp = hour["temp_c"]
-                    time_phrase = get_time_of_day(ts)
+                    time_phrase = get_time_of_day(dt.timestamp())
                     check_and_add("rain" in desc, "🌧️ Rain", time_phrase)
                     check_and_add(temp >= 40, "🔥 Heat", time_phrase)
                     check_and_add(temp <= 20, "❄️ Cold", time_phrase)
@@ -285,7 +281,7 @@ def is_significant_forecast(forecasts):
                 continue
 
     return alerts
-
+    
 def prepare_zone_alerts(zones):
     zone_alerts = {}
     for zone, cities in zones.items():
