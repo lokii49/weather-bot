@@ -2,11 +2,7 @@ name: Daily Weather Tweet
 
 on:
   schedule:
-    - cron: '30 0 * * *'   # 06:00 IST
-    - cron: '30 5 * * *'   # 11:00 IST
-    - cron: '30 10 * * *'  # 16:00 IST
-    - cron: '30 14 * * *'  # 20:00 IST
-    - cron: '30 17 * * *'  # 23:00 IST
+    - cron: '30 0/3 * * *'  # runs every 3 hours starting at 00:30 UTC (06:00 IST)
   workflow_dispatch:
 
 jobs:
