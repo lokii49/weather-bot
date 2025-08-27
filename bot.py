@@ -24,6 +24,17 @@ HYD_ZONES = {
     "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
 }
 
+TIME_BUCKETS = [
+    "midnight",
+    "early morning",
+    "morning",
+    "late morning",
+    "afternoon",
+    "late afternoon",
+    "evening",
+    "night"
+]
+
 client = tweepy.Client(
     bearer_token=os.getenv("BEARER_TOKEN"),
     consumer_key=os.getenv("API_KEY"),
@@ -226,30 +237,27 @@ def get_time_of_day(dt_unix):
     return "night"
 
 def is_significant_forecast(forecasts):
-    alerts, seen = [], set()
     now = datetime.now(pytz.timezone("Asia/Kolkata")).timestamp()
+    events = []
 
-    def check_and_add(condition, label, time_phrase):
-        if condition and label not in seen:
-            alerts.append(f"{label} in {time_phrase}")
-            seen.add(label)
+    def check_event(condition, label, dt):
+        if condition:
+            events.append((label, get_time_of_day(dt), dt))
 
     for source, forecast in forecasts.items():
         if not forecast:
             continue
 
         if source == "owm":
-            hours = forecast.get("hourly", [])
-            for hour in hours:
+            for hour in forecast.get("hourly", []):
                 if hour["dt"] < now:
-                    continue  # skip past forecast
+                    continue
                 desc = hour["weather"][0]["description"].lower()
                 temp = hour["temp"]
                 pop = hour.get("pop", 0)
-                time_phrase = get_time_of_day(hour["dt"])
-                check_and_add("rain" in desc or pop >= 0.1, "🌧️ Rain", time_phrase)
-                check_and_add(temp >= 40, "🔥 Heat", time_phrase)
-                check_and_add(temp <= 20, "❄️ Cold", time_phrase)
+                check_event("rain" in desc or pop >= 0.1, "🌧️ Rain", hour["dt"])
+                check_event(temp >= 40, "🔥 Heat", hour["dt"])
+                check_event(temp <= 20, "❄️ Cold", hour["dt"])
 
         elif source == "weatherbit":
             for hour in forecast["data"]:
@@ -259,10 +267,9 @@ def is_significant_forecast(forecasts):
                 desc = hour["weather"]["description"].lower()
                 temp = hour["temp"]
                 pop = hour.get("pop", 0)
-                time_phrase = get_time_of_day(dt.timestamp())
-                check_and_add("rain" in desc or pop >= 10, "🌧️ Rain", time_phrase)
-                check_and_add(temp >= 40, "🔥 Heat", time_phrase)
-                check_and_add(temp <= 20, "❄️ Cold", time_phrase)
+                check_event("rain" in desc or pop >= 10, "🌧️ Rain", dt.timestamp())
+                check_event(temp >= 40, "🔥 Heat", dt.timestamp())
+                check_event(temp <= 20, "❄️ Cold", dt.timestamp())
 
         elif source == "weatherapi":
             try:
@@ -273,18 +280,51 @@ def is_significant_forecast(forecasts):
                         continue
                     desc = hour["condition"]["text"].lower()
                     temp = hour["temp_c"]
-                    time_phrase = get_time_of_day(dt.timestamp())
-                    check_and_add("rain" in desc, "🌧️ Rain", time_phrase)
-                    check_and_add(temp >= 40, "🔥 Heat", time_phrase)
-                    check_and_add(temp <= 20, "❄️ Cold", time_phrase)
+                    check_event("rain" in desc, "🌧️ Rain", dt.timestamp())
+                    check_event(temp >= 40, "🔥 Heat", dt.timestamp())
+                    check_event(temp <= 20, "❄️ Cold", dt.timestamp())
             except Exception:
                 continue
 
-    return alerts
+    # sort events by actual timestamp
+    events.sort(key=lambda x: x[2])
+
+    # merge continuous events
+    merged = []
+    if events:
+        prev_label, prev_bucket, prev_dt = events[0]
+        start_bucket = prev_bucket
+        end_bucket = prev_bucket
+        merged.append((prev_label, start_bucket, end_bucket))
+
+        for label, bucket, dt in events[1:]:
+            if label == prev_label:
+                # extend range
+                merged[-1] = (label, start_bucket, bucket)
+                end_bucket = bucket
+            else:
+                start_bucket = bucket
+                end_bucket = bucket
+                merged.append((label, start_bucket, end_bucket))
+
+    # 🔹 filter out alerts that are already "expired"
+    current_bucket = get_time_of_day(now)
+    current_index = TIME_BUCKETS.index(current_bucket)
+    valid_alerts = []
+    for label, start, end in merged:
+        end_index = TIME_BUCKETS.index(end)
+        if end_index >= current_index:  # still relevant
+            if start == end:
+                valid_alerts.append(f"{label} in {start}")
+            else:
+                valid_alerts.append(f"{label} from {start} to {end}")
+
+    return valid_alerts
     
 def prepare_zone_alerts(zones):
     zone_alerts = {}
     for zone, cities in zones.items():
+        all_alerts = []
         for city in cities:
             forecast = fetch_all_forecasts(city)
             if not forecast:
@@ -292,8 +332,18 @@ def prepare_zone_alerts(zones):
             alerts = is_significant_forecast(forecast)
             print(f"🔍 {zone} / {city}: alerts={alerts}")
             if alerts:
-                zone_alerts[zone] = alerts[0]
-                break
+                all_alerts.extend(alerts)
+                # no break here — collect from all cities in the zone
+
+        if all_alerts:
+            # deduplicate while preserving order
+            seen = set()
+            unique_alerts = []
+            for a in all_alerts:
+                if a not in seen:
+                    unique_alerts.append(a)
+                    seen.add(a)
+            zone_alerts[zone] = unique_alerts
     return zone_alerts
 
 LAST_TWEET_FILENAME = "last_tweet.json"
