@@ -1,315 +1,36 @@
-name: Daily Weather Bot
+name: Daily Weather Tweet
 
 on:
   schedule:
-    # More frequent during active weather periods
-    - cron: '0 0,3,6,9,12,15,18,21 * * *'  # Every 3 hours
-    - cron: '30 5,11,17 * * *'              # Peak times (morning, lunch, evening)
-    - cron: '0 18 * * 5'                    # Friday 6 PM for weekend prep
-    
+    - cron: '30 0/3 * * *'  # runs every 3 hours starting at 00:30 UTC (06:00 IST)
   workflow_dispatch:
-    inputs:
-      tweet_type:
-        description: 'Type of tweet to generate (auto, festival_focus, severity_alert, hourly_update, pleasant_weather, weekend_forecast, weekly_summary)'
-        required: false
-        default: 'auto'
-      test_mode:
-        description: "Test mode (don't actually tweet)"
-        required: false
-        default: 'false'
-      location:
-        description: 'Override location (default: Secunderabad)'
-        required: false
-        default: 'Secunderabad'
 
 jobs:
-  weather-tweet:
+  tweet:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
+      - name: Checkout code
+        uses: actions/checkout@v3
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
-          cache: 'pip'
-          
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-            
+          python-version: '3.9'
+
       - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          
-      - name: Validate environment variables
-        run: |
-          python -c "
-          import os
-          import sys
-          
-          required_vars = [
-              'API_KEY', 'API_SECRET', 'ACCESS_TOKEN', 'ACCESS_SECRET', 
-              'BEARER_TOKEN', 'COHERE_API_KEY', 'OPENWEATHER_KEY', 
-              'WEATHERAPI_KEY', 'GIST_ID', 'GIST_TOKEN'
-          ]
-          
-          optional_vars = ['WEATHERBIT_KEY', 'DISCORD_WEBHOOK', 'SLACK_WEBHOOK']
-          
-          missing_required = [var for var in required_vars if not os.getenv(var)]
-          missing_optional = [var for var in optional_vars if not os.getenv(var)]
-          
-          if missing_required:
-              print(f'❌ Missing required environment variables: {missing_required}')
-              sys.exit(1)
-          
-          if missing_optional:
-              print(f'⚠️  Missing optional environment variables: {missing_optional}')
-          
-          print('✅ All required environment variables present')
-          print(f'📍 Location: {os.getenv(\"LOCATION\", \"Secunderabad\")}')
-          print(f'🧪 Test mode: {os.getenv(\"TEST_MODE\", \"false\")}')
-          "
+        run: pip install -r requirements.txt
+
+      - name: Run weather bot
         env:
           API_KEY: ${{ secrets.API_KEY }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
           API_SECRET: ${{ secrets.API_SECRET }}
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
           ACCESS_SECRET: ${{ secrets.ACCESS_SECRET }}
           BEARER_TOKEN: ${{ secrets.BEARER_TOKEN }}
-          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
-          OPENWEATHER_KEY: ${{ secrets.OPENWEATHER_KEY }}
           WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
-          WEATHERBIT_KEY: ${{ secrets.WEATHERBIT_KEY }}
+          OPENWEATHER_KEY: ${{ secrets.OPENWEATHER_KEY }}
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          LOCATION: ${{ github.event.inputs.location || 'Secunderabad' }}
-          TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
-          
-      - name: Run enhanced weather bot
-        id: weather-bot
-        env:
-          API_KEY: ${{ secrets.API_KEY }}
-          API_SECRET: ${{ secrets.API_SECRET }}
-          ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-          ACCESS_SECRET: ${{ secrets.ACCESS_SECRET }}
-          BEARER_TOKEN: ${{ secrets.BEARER_TOKEN }}
-          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
-          OPENWEATHER_KEY: ${{ secrets.OPENWEATHER_KEY }}
-          WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
-          WEATHERBIT_KEY: ${{ secrets.WEATHERBIT_KEY }}
-          GIST_ID: ${{ secrets.GIST_ID }}
-          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-          TWEET_TYPE: ${{ github.event.inputs.tweet_type || 'auto' }}
-          TEST_MODE: ${{ github.event.inputs.test_mode || 'false' }}
-          LOCATION: ${{ github.event.inputs.location || 'Secunderabad' }}
-          GITHUB_RUN_NUMBER: ${{ github.run_number }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-        run: |
-          echo "🌤️ Starting Weather Bot Run #${{ github.run_number }}"
-          python bot.py
-          
-          # Capture exit code
-          EXIT_CODE=$?
-          
-          # Output run statistics
-          if [ -f "run_stats.json" ]; then
-            echo "📊 Run Statistics:"
-            cat run_stats.json
-          fi
-          
-          exit $EXIT_CODE
-          
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v3
-        with:
-          name: weather-bot-logs-${{ github.run_number }}
-          path: |
-            logs/*.log
-            *.log
-            error_*.txt
-            run_stats.json
-            tweet_history.json
-          retention-days: 7
-          
-      - name: Upload tweet screenshot (if generated)
-        if: success() && github.event.inputs.test_mode != 'true'
-        uses: actions/upload-artifact@v3
-        with:
-          name: tweet-screenshot-${{ github.run_number }}
-          path: |
-            screenshots/*.png
-          retention-days: 30
-          if-no-files-found: ignore
-
-  # Health check job to monitor bot performance
-  health-check:
-    runs-on: ubuntu-latest
-    needs: weather-tweet
-    if: always()
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
-      - name: Check bot health
-        run: |
-          echo "🔍 Bot Health Check"
-          echo "=================="
-          echo "Bot run completed with status: ${{ needs.weather-tweet.result }}"
-          
-          if [ "${{ needs.weather-tweet.result }}" = "failure" ]; then
-            echo "❌ Weather bot encountered errors"
-            echo "::error::Weather bot failed on run #${{ github.run_number }}"
-            
-            # Create error report
-            cat > error_report.md << EOF
-          # Weather Bot Error Report
-          
-          **Run Number:** ${{ github.run_number }}
-          **Run ID:** ${{ github.run_id }}
-          **Status:** Failed
-          **Time:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          
-          ## Next Steps
-          1. Check the workflow logs for detailed error information
-          2. Review the uploaded artifacts for error logs
-          3. Verify all API keys are valid and not expired
-          4. Check API rate limits
-          
-          [View Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          EOF
-            
-          elif [ "${{ needs.weather-tweet.result }}" = "success" ]; then
-            echo "✅ Weather bot ran successfully"
-          else
-            echo "⚠️ Weather bot status: ${{ needs.weather-tweet.result }}"
-          fi
-          
-      - name: Send notification on failure
-        if: needs.weather-tweet.result == 'failure' && secrets.DISCORD_WEBHOOK
-        run: |
-          curl -X POST ${{ secrets.DISCORD_WEBHOOK }} \
-            -H "Content-Type: application/json" \
-            -d '{
-              "content": "🚨 **Weather Bot Alert**",
-              "embeds": [{
-                "title": "Bot Run Failed",
-                "color": 15158332,
-                "fields": [
-                  {"name": "Run Number", "value": "${{ github.run_number }}", "inline": true},
-                  {"name": "Status", "value": "Failed", "inline": true},
-                  {"name": "Action", "value": "[View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})", "inline": false}
-                ],
-                "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"'"
-              }]
-            }'
-
-  # Weekend festival check (runs only on Fridays)
-  weekend-festival-prep:
-    runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'schedule' && 
-      contains(github.event.schedule, '0 18 * * 5')
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          
-      - name: Weekend festival preparation
-        env:
-          OPENWEATHER_KEY: ${{ secrets.OPENWEATHER_KEY }}
-          WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
-        run: |
-          echo "🎉 Checking upcoming weekend festivals and weather..."
-          
-          python -c "
-          from datetime import datetime, timedelta
-          import json
-          import os
-          
-          # Get weekend dates
-          today = datetime.now()
-          saturday = today + timedelta(days=(5-today.weekday()) % 7 + 1)
-          sunday = saturday + timedelta(days=1)
-          
-          print(f'📅 Preparing for weekend:')
-          print(f'  Saturday: {saturday.strftime(\"%B %d, %Y\")}')
-          print(f'  Sunday: {sunday.strftime(\"%B %d, %Y\")}')
-          
-          # Check for festivals (you can expand this with actual festival API)
-          festivals = {
-              'Diwali': '2025-10-20',
-              'Dussehra': '2025-10-02',
-              'Holi': '2025-03-14',
-              'Ganesh Chaturthi': '2025-08-27',
-          }
-          
-          weekend_festivals = []
-          for festival, date_str in festivals.items():
-              festival_date = datetime.strptime(date_str, '%Y-%m-%d')
-              if saturday.date() <= festival_date.date() <= sunday.date():
-                  weekend_festivals.append(festival)
-          
-          if weekend_festivals:
-              print(f'🎊 Weekend festivals: {', '.join(weekend_festivals)}')
-              # Set output for next job
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write(f'has_festivals=true\n')
-                  f.write(f'festivals={json.dumps(weekend_festivals)}\n')
-          else:
-              print('📍 No major festivals this weekend')
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write(f'has_festivals=false\n')
-          
-          # Prepare weather forecast summary
-          print('\n🌤️ Weekend Weather Preparation:')
-          print('  - Extended forecast analysis')
-          print('  - Festival-specific weather alerts')
-          print('  - Outdoor activity recommendations')
-          "
-        id: weekend-prep
-        
-      - name: Create weekend forecast report
-        if: steps.weekend-prep.outputs.has_festivals == 'true'
-        run: |
-          echo "📝 Creating special weekend forecast with festival focus..."
-          echo "Festivals: ${{ steps.weekend-prep.outputs.festivals }}"
-
-  # Cleanup old artifacts
-  cleanup:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'schedule'
-    needs: [weather-tweet, health-check]
-    
-    steps:
-      - name: Delete old workflow runs
-        uses: Mattraks/delete-workflow-runs@v2
-        with:
-          token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          retain_days: 30
-          keep_minimum_runs: 10
-          
-      - name: Cleanup old artifacts
-        run: |
-          echo "🧹 Cleaning up old artifacts..."
-          # This would typically use the GitHub API to clean up old artifacts
-          echo "Artifacts older than 30 days will be automatically deleted by GitHub"
+        run: python bot.py
