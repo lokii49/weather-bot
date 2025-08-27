@@ -344,6 +344,7 @@ def prepare_zone_alerts(zones):
                     unique_alerts.append(a)
                     seen.add(a)
             zone_alerts[zone] = unique_alerts
+            print(f"✅ Zone alerts generated: {zone_alerts}")
     return zone_alerts
 
 LAST_TWEET_FILENAME = "last_tweet.json"
@@ -497,9 +498,7 @@ def tweet_weather():
     tg_alerts = prepare_zone_alerts(ZONES)
     hyd_alerts = prepare_zone_alerts(HYD_ZONES)
 
-    combined_alerts = {**tg_alerts}
-    if hyd_alerts:
-        combined_alerts["Hyderabad"] = next(iter(hyd_alerts.values()), None)
+    combined_alerts = {**tg_alerts, **hyd_alerts}
 
     current_weather_data = fetch_current_weather("Hyderabad")
     current_summary = summarize_current_weather(current_weather_data)
