@@ -528,6 +528,8 @@ def tweet_weather():
                 print("⏭️ Duplicate tweet detected – skipping post.")
                 return
 
+            print("\n📝 Tweet content:\n", tweet_text, "\n")
+
             try:
                 res = client.create_tweet(text=tweet_text)
                 print("✅ Weather alert tweet posted! Tweet ID:", res.data["id"])
