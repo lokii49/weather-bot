@@ -282,6 +282,12 @@ def is_significant_forecast(forecasts):
 
         elif source == "weatherapi":
             try:
+                # Check daily summary first
+                day = forecast["forecast"]["forecastday"][0]["day"]
+                if day.get("daily_will_it_rain") == 1 or day.get("totalprecip_mm", 0) > 0:
+                    check_event(True, "🌧️ Rain", datetime.now(pytz.timezone("Asia/Kolkata")).timestamp())
+        
+                # Then check hourlies
                 hours = forecast["forecast"]["forecastday"][0]["hour"]
                 for hour in hours:
                     dt = datetime.strptime(hour["time"], "%Y-%m-%d %H:%M").astimezone(pytz.timezone("Asia/Kolkata"))
@@ -290,11 +296,12 @@ def is_significant_forecast(forecasts):
                     desc = hour["condition"]["text"].lower()
                     temp = hour["temp_c"]
                     precip_mm = hour.get("precip_mm", 0)
-
+        
                     check_event(looks_like_rain(desc) or precip_mm > 0, "🌧️ Rain", dt.timestamp())
                     check_event(temp >= 40, "🔥 Heat", dt.timestamp())
                     check_event(temp <= 20, "❄️ Cold", dt.timestamp())
-            except Exception:
+            except Exception as e:
+                print("⚠️ WeatherAPI parsing error:", e)
                 continue
 
     # sort events by actual timestamp
