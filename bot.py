@@ -240,6 +240,11 @@ def is_significant_forecast(forecasts):
     now = datetime.now(pytz.timezone("Asia/Kolkata")).timestamp()
     events = []
 
+    RAIN_KEYWORDS = ["rain", "shower", "drizzle", "thunderstorm", "storm"]
+
+    def looks_like_rain(desc: str) -> bool:
+        return any(word in desc for word in RAIN_KEYWORDS)
+
     def check_event(condition, label, dt):
         if condition:
             events.append((label, get_time_of_day(dt), dt))
@@ -255,7 +260,9 @@ def is_significant_forecast(forecasts):
                 desc = hour["weather"][0]["description"].lower()
                 temp = hour["temp"]
                 pop = hour.get("pop", 0)
-                check_event("rain" in desc or pop >= 0.1, "🌧️ Rain", hour["dt"])
+                rain_mm = hour.get("rain", {}).get("1h", 0)
+
+                check_event(looks_like_rain(desc) or pop >= 0.1 or rain_mm > 0, "🌧️ Rain", hour["dt"])
                 check_event(temp >= 40, "🔥 Heat", hour["dt"])
                 check_event(temp <= 20, "❄️ Cold", hour["dt"])
 
@@ -267,7 +274,9 @@ def is_significant_forecast(forecasts):
                 desc = hour["weather"]["description"].lower()
                 temp = hour["temp"]
                 pop = hour.get("pop", 0)
-                check_event("rain" in desc or pop >= 10, "🌧️ Rain", dt.timestamp())
+                precip_mm = hour.get("precip", 0)
+
+                check_event(looks_like_rain(desc) or pop >= 10 or precip_mm > 0, "🌧️ Rain", dt.timestamp())
                 check_event(temp >= 40, "🔥 Heat", dt.timestamp())
                 check_event(temp <= 20, "❄️ Cold", dt.timestamp())
 
@@ -280,7 +289,9 @@ def is_significant_forecast(forecasts):
                         continue
                     desc = hour["condition"]["text"].lower()
                     temp = hour["temp_c"]
-                    check_event("rain" in desc, "🌧️ Rain", dt.timestamp())
+                    precip_mm = hour.get("precip_mm", 0)
+
+                    check_event(looks_like_rain(desc) or precip_mm > 0, "🌧️ Rain", dt.timestamp())
                     check_event(temp >= 40, "🔥 Heat", dt.timestamp())
                     check_event(temp <= 20, "❄️ Cold", dt.timestamp())
             except Exception:
@@ -299,8 +310,7 @@ def is_significant_forecast(forecasts):
 
         for label, bucket, dt in events[1:]:
             if label == prev_label:
-                # extend range
-                merged[-1] = (label, start_bucket, bucket)
+                merged[-1] = (label, start_bucket, bucket)  # extend range
                 end_bucket = bucket
             else:
                 start_bucket = bucket
