@@ -471,18 +471,23 @@ Tweet:
     print(f"🧠 Using style: {style_key}")
 
     try:
-        response = cohere_client.generate(
-            model="command-r-plus",
-            prompt=prompt,
-            max_tokens=280,
-            temperature=0.7,
-            stop_sequences=["--"]
-        )
-        tweet = response.generations[0].text.strip()
-        return tweet[:280]
-    except Exception as e:
-        print("❌ Cohere error:", e)
-        return None
+    response = cohere_client.chat(
+        model="command-r-plus",
+        messages=[
+            {
+                "role": "user",
+                "content": prompt,
+            }
+        ],
+        temperature=0.7,
+        max_tokens=280,
+        stop_sequences=["--"],
+    )
+    tweet = response.text.strip()
+    return tweet[:280]
+except Exception as e:
+    print("❌ Cohere error:", e)
+    return None
 
 def generate_pleasant_weather_tweet(date_str, current_weather=None):
     prompt = f"""
