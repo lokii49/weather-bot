@@ -472,23 +472,23 @@ Tweet:
 
     try:
         response = cohere_client.chat(
-        model="command-r-plus",
-        messages=[
-            {
-                "role": "user",
-                "content": prompt,
-            }
-        ],
-        temperature=0.7,
-        max_tokens=280,
-        stop_sequences=["--"],
-    )
-    tweet = response.text.strip()
-    return tweet[:280]
-except Exception as e:
-    print("❌ Cohere error:", e)
-    return None
-
+            model="command-r-plus",
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            temperature=0.7,
+            max_tokens=280,
+            stop_sequences=["--"],
+        )
+        tweet = response.text.strip()
+        return tweet[:280]
+    except Exception as e:   # ✅ aligned with "try"
+        print("❌ Cohere error:", e)
+        return None
+        
 def generate_pleasant_weather_tweet(date_str, current_weather=None):
     prompt = f"""
 You're a friendly Indian weather bot. Today’s weather in Telangana is calm.
