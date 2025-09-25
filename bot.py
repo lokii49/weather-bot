@@ -471,7 +471,7 @@ Tweet:
     print(f"🧠 Using style: {style_key}")
 
     try:
-    response = cohere_client.chat(
+        response = cohere_client.chat(
         model="command-r-plus",
         messages=[
             {
