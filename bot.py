@@ -473,7 +473,7 @@ Tweet:
     try:
         response = cohere_client.chat(
             model="command-r-plus",
-            message=[
+            messages=[  # ✅ corrected key here
                 {
                     "role": "user",
                     "content": prompt,
@@ -485,7 +485,7 @@ Tweet:
         )
         tweet = response.text.strip()
         return tweet[:280]
-    except Exception as e:   # ✅ aligned with "try"
+    except Exception as e:
         print("❌ Cohere error:", e)
         return None
         
