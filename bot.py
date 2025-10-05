@@ -473,12 +473,7 @@ Tweet:
     try:
         response = cohere_client.chat(
             model="command-r-plus",
-            messages=[  # ✅ corrected key here
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
+            message=prompt,  # ✅ pass as string
             temperature=0.7,
             max_tokens=280,
             stop_sequences=["--"],
