@@ -472,8 +472,8 @@ Tweet:
 
     try:
         response = cohere_client.chat(
-            model="command-r-plus",
-            message=prompt,  # ✅ pass as string
+            model="command-a-03-2025",
+            message=prompt,
             temperature=0.7,
             max_tokens=280,
             stop_sequences=["--"],
