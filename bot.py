@@ -409,6 +409,7 @@ Format:
 1. Header: "<emoji> Telangana Weather | <Day> <D> <Mon>, <H> <AM/PM>" using local_time rounded down to the hour. Pick the emoji for the most severe event: ⛈️ thunderstorm, 🌧️ heavy or moderate rain, 🌦️ light rain, 🔥 heat, 🌡️ cold, 🌤️ nothing significant.
 2. A blank line, then one line per area, most severe first (thunderstorm > heavy rain > heat > rain > cold):
    "📍 <Area>: <Intensity> <event> <when> (<clock>)"
+   - Each area appears on exactly one line. Join several windows for the same area in that line with a comma ("..., around Khammam overnight (12–2 AM)").
    - Combine zones that share the same event and timing ("📍 North & East Telangana: ...").
    - Name one or two places from "places" when coverage is partial ("Moderate rain around Warangal, Khammam tonight (8–11 PM)").
    - Write Hyderabad zones as "Hyderabad" when all of them share the event, otherwise as "West Hyderabad" etc.
