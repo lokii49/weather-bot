@@ -45,7 +45,7 @@ Env vars (from `.env` locally, GitHub secrets in CI):
    - Thresholds are module constants.
 4. **Zones** (`build_zone_alerts`): flagged hours from all cities in a zone are merged into contiguous windows per event. Each window gets a human `when` label (`tonight`, `tomorrow morning`, …), a clock range, a cities-affected count and the source agreement.
 5. **Tweet** (`generate_tweet`): Claude (`claude-opus-5-5`, effort `low`) writes the tweet.
-   - It gets a stable system prompt, plus a user message holding the JSON payload and a random style from `TWEET_STYLES`.
+   - `SYSTEM_PROMPT` fixes one professional forecast-desk format: a header, one `📍` line per area, and a `⚠️` advisory only for severe events. The user message is the JSON payload alone (alerts with intensity, places, coverage, model agreement, and Hyderabad's current condition).
    - Server-side refusal fallbacks are on (`fallbacks="default"`).
    - `tweet_weight` approximates X's weighted length (emoji count as 2). An over-length draft is regenerated once, then dropped. It is never truncated.
 6. **Dedup and post**: `alert_signature` hashes the (zone, event, date, time-of-day) tuples. The run is skipped if the same signature was posted within `DEDUP_HOURS`, or `CALM_DEDUP_HOURS` for the calm signature.
