@@ -29,7 +29,7 @@ Env vars (from `.env` locally, GitHub secrets in CI):
 
 ## Deployment
 
-`.github/workflows/weather.yml` runs hourly at minute 30 UTC (on the hour in IST); `posting_decision` decides which runs actually post. Manual `workflow_dispatch` runs have a `dry_run` checkbox. CI is the only production runtime: pushing to `main` makes changes live, and any new env var must also be added to the workflow's `env:` block. GitHub disables scheduled workflows after 60 days with no repo activity; re-enable with `gh workflow enable weather.yml`.
+`.github/workflows/weather.yml` runs every 30 minutes (:05 and :35 UTC, off GitHub's congested top of the hour); `posting_decision` decides which runs actually post. Each run makes about 83 provider requests (1 Open-Meteo, 41 OpenWeatherMap, 41 WeatherAPI), so check free-tier quotas before shortening the interval or adding cities. Manual `workflow_dispatch` runs have a `dry_run` checkbox. CI is the only production runtime: pushing to `main` makes changes live, and any new env var must also be added to the workflow's `env:` block. GitHub disables scheduled workflows after 60 days with no repo activity; re-enable with `gh workflow enable weather.yml`.
 
 ## Architecture (flow of `tweet_weather()`)
 
@@ -45,6 +45,7 @@ Env vars (from `.env` locally, GitHub secrets in CI):
    - Thresholds are module constants.
 4. **Zones** (`build_zone_alerts`): flagged hours from all cities in a zone are merged into contiguous windows per event. Each window gets a human `when` label (`tonight`, `tomorrow morning`, …), a clock range, a cities-affected count and the source agreement.
 5. **Tweet** (`generate_tweet`): Claude (`claude-opus-5-5`, effort `low`) writes the tweet.
+   - The header time comes from `header_time()` (run time rounded down to the half hour), so the prompt copies it rather than formatting dates.
    - `SYSTEM_PROMPT` fixes one professional forecast-desk format: a header, one `📍` line per area, and a `⚠️` advisory only for severe events. The user message is the JSON payload alone (alerts with intensity, places, coverage, model agreement, and Hyderabad's current condition).
    - Server-side refusal fallbacks are on (`fallbacks="default"`).
    - `tweet_weight` approximates X's weighted length (emoji count as 2). An over-length draft is regenerated once, then dropped. It is never truncated.

@@ -410,7 +410,7 @@ The forecast comes from up to five weather models (ECMWF, GFS, ICON, OpenWeather
 Voice: a professional weather service, in the manner of IMD or a newsroom weather desk. Factual, calm, specific. Readers act on these posts, so precision matters more than personality: no rhymes, jokes, puns, exclamation marks, rhetorical flourishes, or sign-offs such as "Stay safe!".
 
 Format:
-1. Header: "<emoji> Telangana Weather | <Day> <D> <Mon>, <H> <AM/PM>" using local_time rounded down to the hour. Pick the emoji for the most severe event: ⛈️ thunderstorm, 🌧️ heavy or moderate rain, 🌦️ light rain, 🔥 heat, 🌡️ cold, 🌤️ nothing significant.
+1. Header: "<emoji> Telangana Weather | <header_time>" with header_time copied exactly. Pick the emoji for the most severe event: ⛈️ thunderstorm, 🌧️ heavy or moderate rain, 🌦️ light rain, 🔥 heat, 🌡️ cold, 🌤️ nothing significant.
 2. A blank line, then one line per area, most severe first (thunderstorm > heavy rain > heat > rain > cold):
    "📍 <Area>: <Intensity> <event> <when> (<clock>)"
    - Each area appears on exactly one line. Join several windows for the same area in that line with a comma ("..., around Khammam overnight (12–2 AM)").
@@ -422,9 +422,9 @@ Format:
 
 update_type changes the header and framing:
 - "regular" or "calm": the format above.
-- "escalation": severe weather that the last post did not mention. Header "🚨 Weather Alert | <Day> <D> <Mon>, <H> <AM/PM>". Put the severe lines first, and always end with the ⚠️ advisory.
-- "severe_update": severe weather is ongoing or has shifted. Header "⚠️ Weather Update | <Day> <D> <Mon>, <H> <AM/PM>". Compare with previous_tweet and state what changed in a few words where it helps ("now expected until 11 PM", "spreading to South Telangana").
-- "all_clear": the severe weather in previous_tweet is no longer forecast. Header "✅ Weather Update | <Day> <D> <Mon>, <H> <AM/PM>". First line says the threat has eased for the areas previous_tweet named, then list any remaining non-severe alerts and the Hyderabad line.
+- "escalation": severe weather that the last post did not mention. Header "🚨 Weather Alert | <header_time>". Put the severe lines first, and always end with the ⚠️ advisory.
+- "severe_update": severe weather is ongoing or has shifted. Header "⚠️ Weather Update | <header_time>". Compare with previous_tweet and state what changed in a few words where it helps ("now expected until 11 PM", "spreading to South Telangana").
+- "all_clear": the severe weather in previous_tweet is no longer forecast. Header "✅ Weather Update | <header_time>". First line says the threat has eased for the areas previous_tweet named, then list any remaining non-severe alerts and the Hyderabad line.
 
 Use the 12-hour clock ranges as given. Shorten zone names ("N Telangana", "W Hyd") only if needed to fit. No hashtags, links, or quotation marks. Hard limit 260 characters, with each emoji counting as 2.
 
@@ -477,6 +477,12 @@ def _ask_claude(client, user_content):
     return text.strip('"').strip() or None
 
 
+def header_time(now):
+    """Run time rounded down to the half hour, e.g. "Wed 7 Oct, 7 PM" or "Wed 7 Oct, 7:30 PM"."""
+    t = now.replace(minute=now.minute - now.minute % 30)
+    return t.strftime("%a %-d %b, %-I %p" if t.minute == 0 else "%a %-d %b, %-I:%M %p")
+
+
 def generate_tweet(zone_alerts, current, now, update_type, previous_tweet):
     hyd_now = current.get("Hyderabad")
     if hyd_now:
@@ -486,6 +492,7 @@ def generate_tweet(zone_alerts, current, now, update_type, previous_tweet):
         }
     payload = {
         "local_time": now.strftime("%a %-d %b, %-I:%M %p IST"),
+        "header_time": header_time(now),
         "forecast_window_hours": LOOKAHEAD_HOURS,
         "update_type": update_type,
         "previous_tweet": previous_tweet if update_type in ("severe_update", "all_clear") else None,
