@@ -50,13 +50,14 @@ Env vars (from `.env` locally, GitHub secrets in CI):
    - `tweet_weight` approximates X's weighted length (emoji count as 2). An over-length draft is regenerated once, then dropped. It is never truncated.
 6. **Posting policy** (`posting_decision`), checked before calling Claude so skipped runs cost only the forecast fetch. It returns an `update_type` that the prompt uses to pick the header and framing:
    - **Severe** (`SEVERE_EVENTS`: thunderstorm, heavy rain, heat):
-     - Severe weather the last post didn't cover posts immediately as `escalation`.
+     - Severe changes need two runs in a row to agree, so a single run where the models flip can't trigger an alert/all-clear pair. Each run stores what it saw in `last_run_severe`.
+     - Severe weather the last post didn't cover posts as `escalation` once a second consecutive run confirms it.
      - A changed severe forecast posts after `SEVERE_MIN_GAP_HOURS`, and an unchanged one repeats every `SEVERE_REPEAT_HOURS`, both as `severe_update`.
-     - When severe weather drops out of the forecast, the bot posts `all_clear`.
+     - When severe weather is absent on two consecutive runs, the bot posts `all_clear`.
    - **Non-severe alerts** (`regular`) post at most every `NORMAL_MIN_GAP_HOURS`. An unchanged forecast isn't repeated within `DEDUP_HOURS`. `alert_signature` hashes the (zone, event, date, time-of-day) tuples.
    - **Calm** (signature `"calm"`) posts once per day during `CALM_POST_HOURS` (IST morning).
    - `severe_update` and `all_clear` pass the previous tweet to Claude so it can say what changed.
 
 ### Persistent state (GitHub Gist)
 
-CI has no disk persistence. `last_tweet.json` in the Gist holds `{text, signature, severe, posted_at, last_calm_date}`. The Gist is read once per run and written only after a successful post.
+CI has no disk persistence. `last_tweet.json` in the Gist holds `{text, signature, severe, posted_at, last_calm_date, last_run_severe}`. The Gist is read once per run, and written after a successful post or when `last_run_severe` flips. Dry runs never write it.

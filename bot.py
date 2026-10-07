@@ -538,14 +538,10 @@ def load_last_tweet():
         return None
 
 
-def save_last_tweet(text, signature, severe, now, last):
-    state = {"text": text, "signature": signature, "severe": severe, "posted_at": now.isoformat()}
-    calm_date = now.date().isoformat() if signature == "calm" else (last or {}).get("last_calm_date")
-    if calm_date:
-        state["last_calm_date"] = calm_date
+def save_state(state):
     payload = {"files": {LAST_TWEET_FILENAME: {"content": json.dumps(state, ensure_ascii=False)}}}
     response = HTTP.patch(f"https://api.github.com/gists/{GIST_ID}", headers=_gist_headers(), json=payload, timeout=10)
-    print("✅ Last tweet saved to Gist" if response.ok else f"❌ Failed to save last tweet: {response.status_code}")
+    print("✅ State saved to Gist" if response.ok else f"❌ Failed to save state: {response.status_code}")
 
 
 def is_severe(zone_alerts):
@@ -555,6 +551,11 @@ def is_severe(zone_alerts):
 def posting_decision(last, zone_alerts, signature, now):
     """Returns (update_type, None) to post or (None, reason) to skip.
 
+    Severe weather must be seen on two runs in a row before it is announced, and
+    must be absent on two runs in a row before the all-clear, so a single run where
+    the models flip doesn't trigger an alert/all-clear pair. last["last_run_severe"]
+    is what the previous run saw.
+
     update_type tells the prompt how to frame the tweet: "regular", "escalation"
     (new severe weather), "severe_update" (severe weather changed or ongoing),
     "all_clear" (severe weather has ended) or "calm".
@@ -562,6 +563,7 @@ def posting_decision(last, zone_alerts, signature, now):
     last = last or {}
     severe = is_severe(zone_alerts)
     was_severe = bool(last.get("severe"))
+    prev_run_severe = bool(last.get("last_run_severe"))
     same = last.get("signature") == signature
     hours_since = (
         (now - datetime.fromisoformat(last["posted_at"])).total_seconds() / 3600
@@ -570,6 +572,8 @@ def posting_decision(last, zone_alerts, signature, now):
 
     if severe:
         if not was_severe:
+            if not prev_run_severe:
+                return None, "severe weather seen for the first time; waiting for the next run to confirm"
             return "escalation", None
         if not same and hours_since >= SEVERE_MIN_GAP_HOURS:
             return "severe_update", None
@@ -578,6 +582,8 @@ def posting_decision(last, zone_alerts, signature, now):
         return None, f"severe weather already covered {hours_since:.1f}h ago"
 
     if was_severe:
+        if prev_run_severe:
+            return None, "severe weather gone from the forecast; waiting for the next run to confirm the all-clear"
         return "all_clear", None
 
     if signature == "calm":
@@ -619,36 +625,48 @@ def tweet_weather(dry_run=False):
     if not zone_alerts:
         print("ℹ️ No significant weather in the next", LOOKAHEAD_HOURS, "hours.")
 
-    last = load_last_tweet()
-    update_type, reason = posting_decision(last, zone_alerts, signature, now)
-    if reason:
-        print(f"⏭️ Not posting: {reason}.")
-        return
-    print(f"📣 Posting: {update_type}")
-
-    if dry_run and not os.getenv("ANTHROPIC_API_KEY"):
-        print("🧪 Dry run without ANTHROPIC_API_KEY – stopping before tweet generation.")
-        return
-
-    tweet = generate_tweet(zone_alerts, current, now, update_type, (last or {}).get("text"))
-    if not tweet:
-        print("❌ Failed to generate tweet.")
-        return
-
-    print(f"\n📝 Tweet ({tweet_weight(tweet)}/{MAX_TWEET_WEIGHT}):\n{tweet}\n")
-    if dry_run:
-        print("🧪 Dry run – not posting or saving state.")
-        return
+    last = load_last_tweet() or {}
+    severe_now = is_severe(zone_alerts)
+    state = {**last, "last_run_severe": severe_now}
 
     try:
-        post_tweet(tweet)
-    except tweepy.TooManyRequests:
-        print("❌ Rate limit hit.")
-        return
-    except Exception as e:
-        print("❌ Error tweeting:", e)
-        return
-    save_last_tweet(tweet, signature, is_severe(zone_alerts), now, last)
+        update_type, reason = posting_decision(last, zone_alerts, signature, now)
+        if reason:
+            print(f"⏭️ Not posting: {reason}.")
+            return
+        print(f"📣 Posting: {update_type}")
+
+        if dry_run and not os.getenv("ANTHROPIC_API_KEY"):
+            print("🧪 Dry run without ANTHROPIC_API_KEY – stopping before tweet generation.")
+            return
+
+        tweet = generate_tweet(zone_alerts, current, now, update_type, last.get("text"))
+        if not tweet:
+            print("❌ Failed to generate tweet.")
+            return
+
+        print(f"\n📝 Tweet ({tweet_weight(tweet)}/{MAX_TWEET_WEIGHT}):\n{tweet}\n")
+        if dry_run:
+            return
+
+        try:
+            post_tweet(tweet)
+        except tweepy.TooManyRequests:
+            print("❌ Rate limit hit.")
+            return
+        except Exception as e:
+            print("❌ Error tweeting:", e)
+            return
+
+        state.update(text=tweet, signature=signature, severe=severe_now, posted_at=now.isoformat())
+        if signature == "calm":
+            state["last_calm_date"] = now.date().isoformat()
+    finally:
+        # Every run records what it saw, so the next run can confirm severe changes.
+        if dry_run:
+            print("🧪 Dry run – not posting or saving state.")
+        elif state != last and GIST_ID and GIST_TOKEN:
+            save_state(state)
 
 
 if __name__ == "__main__":
