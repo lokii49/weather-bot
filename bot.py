@@ -1,571 +1,573 @@
-import os, json, random, cohere
+import argparse
+import hashlib
+import json
+import math
+import os
+import random
+import statistics
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-import requests, pytz
-from github import Github, InputFileContent
+from zoneinfo import ZoneInfo
+
+import anthropic
+import requests
 import tweepy
 from dotenv import load_dotenv
 
 load_dotenv()
-cohere_client = cohere.Client(os.getenv("COHERE_API_KEY"))
 
+IST = ZoneInfo("Asia/Kolkata")
+
+# Coordinates verified against OpenStreetMap Nominatim; all fall inside Telangana.
 ZONES = {
-    "North Telangana": ["Adilabad", "Nirmal", "Asifabad", "Mancherial", "Kamareddy"],
-    "South Telangana": ["Mahabubnagar", "Gadwal", "Wanaparthy", "Nagarkurnool", "Narayanpet"],
-    "East Telangana": ["Khammam", "Bhadrachalam", "Mahabubabad", "Warangal", "Suryapet"],
-    "West Telangana": ["Vikarabad", "Sangareddy", "Zaheerabad"],
-    "Central Telangana": ["Hyderabad", "Medchal", "Siddipet", "Nalgonda", "Karimnagar"]
+    "North Telangana": {
+        "Adilabad": (19.6759, 78.5340), "Nirmal": (19.0915, 78.3966), "Asifabad": (19.3593, 79.2960),
+        "Mancherial": (18.9813, 79.5198), "Kamareddy": (18.3166, 78.0539),
+    },
+    "South Telangana": {
+        "Mahabubnagar": (16.6966, 77.9591), "Gadwal": (16.2347, 77.7946), "Wanaparthy": (16.2853, 77.9864),
+        "Nagarkurnool": (16.4158, 78.6830), "Narayanpet": (16.7006, 77.6165),
+    },
+    "East Telangana": {
+        "Khammam": (17.2465, 80.1500), "Bhadrachalam": (17.6688, 80.8940), "Mahabubabad": (17.7139, 80.0413),
+        "Warangal": (17.9821, 79.5971), "Suryapet": (17.0800, 79.7925),
+    },
+    "West Telangana": {
+        "Vikarabad": (17.2703, 77.7453), "Sangareddy": (17.8684, 77.8227), "Zaheerabad": (17.6794, 77.6153),
+    },
+    "Central Telangana": {
+        "Hyderabad": (17.3606, 78.4741), "Medchal": (17.6340, 78.4843), "Siddipet": (18.0056, 78.8961),
+        "Nalgonda": (17.0504, 79.2669), "Karimnagar": (18.4348, 79.1328),
+    },
 }
 
 HYD_ZONES = {
-    "North Hyderabad": ["Kompally", "Medchal", "Suchitra", "Bolarum"],
-    "South Hyderabad": ["LB Nagar", "Malakpet", "Falaknuma", "Kanchanbagh"],
-    "East Hyderabad": ["Uppal", "Ghatkesar", "Keesara"],
-    "West Hyderabad": ["Gachibowli", "Kondapur", "Madhapur", "Miyapur"],
-    "Central Hyderabad": ["Secunderabad", "Begumpet", "Nampally", "Abids"]
+    "North Hyderabad": {
+        "Kompally": (17.5401, 78.4909), "Suchitra": (17.5023, 78.4838), "Bolarum": (17.5298, 78.5155),
+    },
+    "South Hyderabad": {
+        "LB Nagar": (17.3502, 78.5511), "Malakpet": (17.3737, 78.4996), "Falaknuma": (17.3327, 78.4752),
+        "Kanchanbagh": (17.3281, 78.5002),
+    },
+    "East Hyderabad": {
+        "Uppal": (17.4025, 78.5613), "Ghatkesar": (17.4511, 78.6843), "Keesara": (17.5249, 78.6665),
+    },
+    "West Hyderabad": {
+        "Gachibowli": (17.4436, 78.3520), "Kondapur": (17.4588, 78.3731), "Madhapur": (17.4409, 78.3916),
+        "Miyapur": (17.4982, 78.3568),
+    },
+    "Central Hyderabad": {
+        "Secunderabad": (17.4337, 78.5007), "Begumpet": (17.4462, 78.4630), "Nampally": (17.3924, 78.4701),
+        "Abids": (17.3895, 78.4772),
+    },
 }
 
-TIME_BUCKETS = [
-    "midnight",
-    "early morning",
-    "morning",
-    "late morning",
-    "afternoon",
-    "late afternoon",
-    "evening",
-    "night"
-]
+ALL_ZONES = {**ZONES, **HYD_ZONES}
+CITIES = {city: coords for cities in ALL_ZONES.values() for city, coords in cities.items()}
 
-client = tweepy.Client(
-    bearer_token=os.getenv("BEARER_TOKEN"),
-    consumer_key=os.getenv("API_KEY"),
-    consumer_secret=os.getenv("API_SECRET"),
-    access_token=os.getenv("ACCESS_TOKEN"),
-    access_token_secret=os.getenv("ACCESS_SECRET")
-)
+# Forecast window and event thresholds
+LOOKAHEAD_HOURS = 12
+RAIN_MM = 0.5          # mm/h that counts as rain for a single source
+RAIN_POP = 50          # % precipitation probability that counts as rain for a single source
+HEAVY_RAIN_MM = 7.5    # median mm/h across sources (IMD "heavy" is ~7.5 mm/h)
+HEAT_C = 40
+COLD_C = 20
+
+# Duplicate suppression
+DEDUP_HOURS = 6
+CALM_DEDUP_HOURS = 12
+
+OPEN_METEO_MODELS = {
+    "ecmwf": "ecmwf_ifs025",
+    "gfs": "gfs_seamless",
+    "icon": "icon_seamless",
+}
+
+CLAUDE_MODEL = "claude-opus-5-5"
+MAX_TWEET_WEIGHT = 280
 
 OWM_API_KEY = os.getenv("OPENWEATHER_KEY")
 WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY")
-WEATHERBIT_API_KEY = os.getenv("WEATHERBIT_KEY")
-GIST_ID = os.environ["GIST_ID"]
-GIST_TOKEN = os.environ["GIST_TOKEN"]
-GIST_FILENAME = "coords_cache.json"
-
-BASE_FORECAST_URL = "https://api.openweathermap.org/data/2.5/onecall?lat={}&lon={}&exclude=minutely&appid={}&units=metric"
-BASE_CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather?q={}&appid={}&units=metric"
-
-def load_coords_cache():
-    url = f"https://api.github.com/gists/{GIST_ID}"
-    headers = {"Authorization": f"token {GIST_TOKEN}"}
-    response = requests.get(url, headers=headers)
-
-    if response.status_code != 200:
-        print(f"❌ Failed to fetch gist: {response.status_code}")
-        return {}
-
-    gist_data = response.json()
-    files = gist_data.get("files", {})
-
-    if GIST_FILENAME in files:
-        try:
-            return json.loads(files[GIST_FILENAME]["content"])
-        except json.JSONDecodeError:
-            print("⚠️ Cache file exists but is not valid JSON — resetting.")
-            return {}
-    else:
-        # Create empty file in Gist
-        print(f"📄 Cache file '{GIST_FILENAME}' not found in Gist — creating it.")
-        save_coords_cache({})
-        return {}
-
-def save_coords_cache(data):
-    url = f"https://api.github.com/gists/{GIST_ID}"
-    headers = {"Authorization": f"token {GIST_TOKEN}"}
-    payload = {
-        "files": {
-            GIST_FILENAME: {
-                "content": json.dumps(data, indent=2)
-            }
-        }
-    }
-    response = requests.patch(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        print("✅ Cache saved to Gist")
-    else:
-        print(f"❌ Failed to save cache: {response.status_code}")
-
-def get_coordinates(city):
-    cache = load_coords_cache()
-    if city in cache:
-        return cache[city]["lat"], cache[city]["lon"]
-
-    try:
-        # Add `,IN` to improve accuracy
-        url = f"http://api.openweathermap.org/geo/1.0/direct?q={city},IN&limit=1&appid={OWM_API_KEY}"
-        response = requests.get(url, timeout=10)
-
-        if response.status_code != 200:
-            print(f"❌ Failed to fetch coordinates for {city}: HTTP {response.status_code}")
-            return None
-
-        data = response.json()
-        if not isinstance(data, list) or not data:
-            print(f"⚠️ No coordinates found for {city} – Response: {data}")
-            return None
-
-        lat = data[0].get("lat")
-        lon = data[0].get("lon")
-
-        if lat is None or lon is None:
-            print(f"⚠️ Missing lat/lon for {city} – Data: {data[0]}")
-            return None
-
-        print(f"📍 {city} coords: {lat}, {lon}")
-        cache[city] = {"lat": lat, "lon": lon}
-        save_coords_cache(cache)
-        return lat, lon
-
-    except Exception as e:
-        import traceback
-        print(f"❌ Exception for {city}: {type(e).__name__} - {e}")
-        traceback.print_exc()
-        return None
-
-def fetch_forecast(city):
-    coords = get_coordinates(city)
-    if not coords:
-        return None
-    try:
-        url = BASE_FORECAST_URL.format(*coords, OWM_API_KEY)
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if "hourly" in data:
-            print(f"✅ Forecast fetched for {city}")
-        return data
-    except Exception as e:
-        print(f"❌ Error fetching forecast for {city}:", e)
-        return None
-
-def fetch_current_weather(city):
-    try:
-        url = BASE_CURRENT_URL.format(city, OWM_API_KEY)
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if response.status_code == 200 and "weather" in data:
-            print(f"✅ Current weather fetched for {city}")
-            return data
-        print(f"⚠️ No current weather data for {city}")
-        return None
-    except Exception as e:
-        print(f"❌ Error fetching current weather for {city}:", e)
-        return None
-
-def fetch_weatherbit_forecast(city):
-    try:
-        url = f"https://api.weatherbit.io/v2.0/forecast/hourly?city={city}&key={os.getenv('WEATHERBIT_API_KEY')}&hours=24"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if "data" in data:
-            print(f"✅ Weatherbit forecast for {city}")
-            return data
-    except Exception as e:
-        print(f"❌ Weatherbit error for {city}:", e)
-    return None
-
-def fetch_weatherbit_current(city):
-    try:
-        url = f"https://api.weatherbit.io/v2.0/current?city={city}&key={os.getenv('WEATHERBIT_API_KEY')}"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if "data" in data:
-            print(f"✅ Weatherbit current weather for {city}")
-            return data["data"][0]
-    except Exception as e:
-        print(f"❌ Weatherbit current error for {city}:", e)
-    return None
-
-def fetch_weatherapi_forecast(city):
-    try:
-        url = f"http://api.weatherapi.com/v1/forecast.json?key={os.getenv('WEATHERAPI_KEY')}&q={city}&hours=24"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if "forecast" in data:
-            print(f"✅ WeatherAPI forecast for {city}")
-            return data
-    except Exception as e:
-        print(f"❌ WeatherAPI forecast error for {city}:", e)
-    return None
-
-def fetch_weatherapi_current(city):
-    try:
-        url = f"http://api.weatherapi.com/v1/current.json?key={os.getenv('WEATHERAPI_KEY')}&q={city}"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if "current" in data:
-            print(f"✅ WeatherAPI current weather for {city}")
-            return data
-    except Exception as e:
-        print(f"❌ WeatherAPI current error for {city}:", e)
-    return None
-
-def fetch_all_forecasts(city):
-    owm = fetch_forecast(city)
-    wb = fetch_weatherbit_forecast(city)
-    wa = fetch_weatherapi_forecast(city)
-    return {
-        "owm": owm,
-        "weatherbit": wb,
-        "weatherapi": wa
-    }
-
-def summarize_current_weather(data):
-    if not data:
-        return None
-    desc = data["weather"][0]["description"].capitalize()
-    temp = data["main"]["temp"]
-    city = data["name"]
-    return f"{city}: {desc}, {temp}°C"
-
-def get_time_of_day(dt_unix):
-    hour = datetime.fromtimestamp(dt_unix, pytz.timezone("Asia/Kolkata")).hour
-    if 0 <= hour <= 2: return "midnight"
-    if 3 <= hour <= 6: return "early morning"
-    if 7 <= hour <= 10: return "morning"
-    if 11 <= hour <= 12: return "late morning"
-    if 13 <= hour <= 15: return "afternoon"
-    if 16 <= hour <= 17: return "late afternoon"
-    if 18 <= hour <= 20: return "evening"
-    return "night"
-
-def is_significant_forecast(forecasts):
-    now = datetime.now(pytz.timezone("Asia/Kolkata")).timestamp()
-    events = []
-
-    RAIN_KEYWORDS = ["rain", "shower", "drizzle", "thunderstorm", "storm"]
-
-    def looks_like_rain(desc: str) -> bool:
-        return any(word in desc for word in RAIN_KEYWORDS)
-
-    def check_event(condition, label, dt):
-        if condition:
-            events.append((label, get_time_of_day(dt), dt))
-
-    for source, forecast in forecasts.items():
-        if not forecast:
-            continue
-
-        if source == "owm":
-            for hour in forecast.get("hourly", []):
-                if hour["dt"] < now:
-                    continue
-                desc = hour["weather"][0]["description"].lower()
-                temp = hour["temp"]
-                pop = hour.get("pop", 0)
-                rain_mm = hour.get("rain", {}).get("1h", 0)
-
-                check_event(looks_like_rain(desc) or pop >= 0.1 or rain_mm > 0, "🌧️ Rain", hour["dt"])
-                check_event(temp >= 40, "🔥 Heat", hour["dt"])
-                check_event(temp <= 20, "❄️ Cold", hour["dt"])
-
-        elif source == "weatherbit":
-            for hour in forecast["data"]:
-                dt = datetime.fromisoformat(hour["timestamp_local"]).astimezone(pytz.timezone("Asia/Kolkata"))
-                if dt.timestamp() < now:
-                    continue
-                desc = hour["weather"]["description"].lower()
-                temp = hour["temp"]
-                pop = hour.get("pop", 0)
-                precip_mm = hour.get("precip", 0)
-
-                check_event(looks_like_rain(desc) or pop >= 10 or precip_mm > 0, "🌧️ Rain", dt.timestamp())
-                check_event(temp >= 40, "🔥 Heat", dt.timestamp())
-                check_event(temp <= 20, "❄️ Cold", dt.timestamp())
-
-        elif source == "weatherapi":
-            try:
-                # Check daily summary first
-                day = forecast["forecast"]["forecastday"][0]["day"]
-                if day.get("daily_will_it_rain") == 1 or day.get("totalprecip_mm", 0) > 0:
-                    check_event(True, "🌧️ Rain", datetime.now(pytz.timezone("Asia/Kolkata")).timestamp())
-        
-                # Then check hourlies
-                hours = forecast["forecast"]["forecastday"][0]["hour"]
-                for hour in hours:
-                    dt = datetime.strptime(hour["time"], "%Y-%m-%d %H:%M").astimezone(pytz.timezone("Asia/Kolkata"))
-                    if dt.timestamp() < now:
-                        continue
-                    desc = hour["condition"]["text"].lower()
-                    temp = hour["temp_c"]
-                    precip_mm = hour.get("precip_mm", 0)
-        
-                    check_event(looks_like_rain(desc) or precip_mm > 0, "🌧️ Rain", dt.timestamp())
-                    check_event(temp >= 40, "🔥 Heat", dt.timestamp())
-                    check_event(temp <= 20, "❄️ Cold", dt.timestamp())
-            except Exception as e:
-                print("⚠️ WeatherAPI parsing error:", e)
-                continue
-
-    # sort events by actual timestamp
-    events.sort(key=lambda x: x[2])
-
-    # merge continuous events
-    merged = []
-    if events:
-        prev_label, prev_bucket, prev_dt = events[0]
-        start_bucket = prev_bucket
-        end_bucket = prev_bucket
-        merged.append((prev_label, start_bucket, end_bucket))
-
-        for label, bucket, dt in events[1:]:
-            if label == prev_label:
-                merged[-1] = (label, start_bucket, bucket)  # extend range
-                end_bucket = bucket
-            else:
-                start_bucket = bucket
-                end_bucket = bucket
-                merged.append((label, start_bucket, end_bucket))
-
-    # 🔹 filter out alerts that are already "expired"
-    current_bucket = get_time_of_day(now)
-    current_index = TIME_BUCKETS.index(current_bucket)
-    valid_alerts = []
-    for label, start, end in merged:
-        end_index = TIME_BUCKETS.index(end)
-        if end_index >= current_index:  # still relevant
-            if start == end:
-                valid_alerts.append(f"{label} in {start}")
-            else:
-                valid_alerts.append(f"{label} from {start} to {end}")
-
-    return valid_alerts
-    
-def prepare_zone_alerts(zones):
-    zone_alerts = {}
-    for zone, cities in zones.items():
-        all_alerts = []
-        for city in cities:
-            forecast = fetch_all_forecasts(city)
-            if not forecast:
-                continue
-            alerts = is_significant_forecast(forecast)
-            print(f"🔍 {zone} / {city}: alerts={alerts}")
-            if alerts:
-                all_alerts.extend(alerts)
-                # no break here — collect from all cities in the zone
-
-        if all_alerts:
-            # deduplicate while preserving order
-            seen = set()
-            unique_alerts = []
-            for a in all_alerts:
-                if a not in seen:
-                    unique_alerts.append(a)
-                    seen.add(a)
-            zone_alerts[zone] = unique_alerts
-            print(f"✅ Zone alerts generated: {zone_alerts}")
-    return zone_alerts
-
+GIST_ID = os.getenv("GIST_ID")
+GIST_TOKEN = os.getenv("GIST_TOKEN")
 LAST_TWEET_FILENAME = "last_tweet.json"
 
-def load_last_tweet():
-    url = f"https://api.github.com/gists/{GIST_ID}"
-    headers = {"Authorization": f"token {GIST_TOKEN}"}
-    response = requests.get(url, headers=headers)
+HTTP = requests.Session()
 
-    if response.status_code != 200:
-        print("⚠️ Couldn't fetch last tweet file")
-        return None
 
-    gist_data = response.json()
-    files = gist_data.get("files", {})
-    if LAST_TWEET_FILENAME in files:
-        try:
-            return json.loads(files[LAST_TWEET_FILENAME]["content"])
-        except Exception as e:
-            print("⚠️ Could not parse last tweet:", e)
-    return None
+# ---------------------------------------------------------------------------
+# Forecast sources. Each returns {city: [point, ...]} where a point is
+# {"ts": aware IST datetime on the hour, "temp", "pop" (0-100 or None),
+#  "precip" (mm/h), "rainy" (bool), "thunder" (bool)}.
+# ---------------------------------------------------------------------------
 
-def save_last_tweet(tweet_text):
-    url = f"https://api.github.com/gists/{GIST_ID}"
-    headers = {"Authorization": f"token {GIST_TOKEN}"}
-    payload = {
-        "files": {
-            LAST_TWEET_FILENAME: {
-                "content": json.dumps({"text": tweet_text})
-            }
-        }
+def _hour(dt):
+    return dt.astimezone(IST).replace(minute=0, second=0, microsecond=0)
+
+
+def _wmo_flags(code):
+    code = int(code or 0)
+    thunder = code >= 95
+    rainy = thunder or 51 <= code <= 67 or 80 <= code <= 82
+    return rainy, thunder
+
+
+def fetch_open_meteo():
+    """One request covers every city and every model."""
+    names = list(CITIES)
+    params = {
+        "latitude": ",".join(str(CITIES[n][0]) for n in names),
+        "longitude": ",".join(str(CITIES[n][1]) for n in names),
+        "hourly": "temperature_2m,precipitation_probability,precipitation,weather_code",
+        "current": "temperature_2m,relative_humidity_2m,weather_code",
+        "models": ",".join(OPEN_METEO_MODELS.values()),
+        "timezone": "Asia/Kolkata",
+        "forecast_hours": LOOKAHEAD_HOURS + 2,
     }
-    response = requests.patch(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        print("✅ Last tweet saved to Gist")
+    try:
+        response = HTTP.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=20)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        print("❌ Open-Meteo error:", e)
+        return {}, {}
+
+    if isinstance(data, dict):
+        data = [data]
+
+    by_source = {source: {} for source in OPEN_METEO_MODELS}
+    current = {}
+    for name, loc in zip(names, data):
+        hourly = loc.get("hourly", {})
+        times = [datetime.fromisoformat(t).replace(tzinfo=IST) for t in hourly.get("time", [])]
+        for source, model in OPEN_METEO_MODELS.items():
+            temps = hourly.get(f"temperature_2m_{model}") or []
+            pops = hourly.get(f"precipitation_probability_{model}") or [None] * len(times)
+            precs = hourly.get(f"precipitation_{model}") or []
+            codes = hourly.get(f"weather_code_{model}") or []
+            points = []
+            for i, ts in enumerate(times):
+                if i >= len(temps) or temps[i] is None:
+                    continue
+                rainy, thunder = _wmo_flags(codes[i] if i < len(codes) else 0)
+                points.append({
+                    "ts": ts,
+                    "temp": temps[i],
+                    "pop": pops[i] if i < len(pops) else None,
+                    "precip": (precs[i] if i < len(precs) else 0) or 0,
+                    "rainy": rainy,
+                    "thunder": thunder,
+                })
+            if points:
+                by_source[source][name] = points
+
+        cur = loc.get("current") or {}
+        temp = next((v for k, v in cur.items() if k.startswith("temperature_2m") and v is not None), None)
+        hum = next((v for k, v in cur.items() if k.startswith("relative_humidity_2m") and v is not None), None)
+        code = next((v for k, v in cur.items() if k.startswith("weather_code") and v is not None), None)
+        if temp is not None:
+            current[name] = {"temp_c": temp, "humidity": hum, "wmo_code": code}
+
+    for source, cities in by_source.items():
+        print(f"✅ Open-Meteo {source}: {len(cities)}/{len(names)} cities")
+    return by_source, current
+
+
+def _owm_city(name):
+    lat, lon = CITIES[name]
+    url = "https://api.openweathermap.org/data/2.5/forecast"
+    params = {"lat": lat, "lon": lon, "appid": OWM_API_KEY, "units": "metric", "cnt": LOOKAHEAD_HOURS // 3 + 2}
+    response = HTTP.get(url, params=params, timeout=10)
+    response.raise_for_status()
+    points = []
+    for item in response.json().get("list", []):
+        start = _hour(datetime.fromtimestamp(item["dt"], IST))
+        weather_id = item["weather"][0]["id"]
+        thunder = 200 <= weather_id < 300
+        rainy = thunder or 300 <= weather_id < 600
+        precip = item.get("rain", {}).get("3h", 0) / 3
+        # 3-hour step: spread over its three hours
+        for offset in range(3):
+            points.append({
+                "ts": start + timedelta(hours=offset),
+                "temp": item["main"]["temp"],
+                "pop": item.get("pop", 0) * 100,
+                "precip": precip,
+                "rainy": rainy,
+                "thunder": thunder,
+            })
+    return points
+
+
+def _weatherapi_city(name):
+    lat, lon = CITIES[name]
+    url = "https://api.weatherapi.com/v1/forecast.json"
+    params = {"key": WEATHERAPI_KEY, "q": f"{lat},{lon}", "days": 2, "aqi": "no", "alerts": "no"}
+    response = HTTP.get(url, params=params, timeout=10)
+    response.raise_for_status()
+    points = []
+    for day in response.json()["forecast"]["forecastday"]:
+        for hour in day["hour"]:
+            text = hour["condition"]["text"].lower()
+            thunder = "thunder" in text
+            points.append({
+                "ts": _hour(datetime.fromtimestamp(hour["time_epoch"], IST)),
+                "temp": hour["temp_c"],
+                "pop": hour.get("chance_of_rain"),
+                "precip": hour.get("precip_mm", 0) or 0,
+                "rainy": thunder or any(w in text for w in ("rain", "drizzle", "shower")),
+                "thunder": thunder,
+            })
+    return points
+
+
+def _fetch_per_city(label, fn):
+    def safe(name):
+        try:
+            return name, fn(name)
+        except Exception as e:
+            print(f"⚠️ {label} failed for {name}: {type(e).__name__} {e}")
+            return name, None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = {name: pts for name, pts in pool.map(safe, CITIES) if pts}
+    print(f"{'✅' if results else '❌'} {label}: {len(results)}/{len(CITIES)} cities")
+    return results
+
+
+def fetch_all_sources():
+    sources, current = fetch_open_meteo()
+    if OWM_API_KEY:
+        sources["openweathermap"] = _fetch_per_city("OpenWeatherMap", _owm_city)
     else:
-        print("❌ Failed to save last tweet")
+        print("ℹ️ OPENWEATHER_KEY not set – skipping OpenWeatherMap")
+    if WEATHERAPI_KEY:
+        sources["weatherapi"] = _fetch_per_city("WeatherAPI", _weatherapi_city)
+    else:
+        print("ℹ️ WEATHERAPI_KEY not set – skipping WeatherAPI")
+    return {s: cities for s, cities in sources.items() if cities}, current
 
 
-def format_zone_summary(zone_alerts):
-    lines = []
-    for zone, alert in zone_alerts.items():
-        short_zone = zone.replace("Telangana", "").replace("Hyderabad", "").strip()
-        name = short_zone or zone
-        lines.append(f"{zone}: {alert}")
-    return "\n".join(lines)
+# ---------------------------------------------------------------------------
+# Consensus event detection
+# ---------------------------------------------------------------------------
 
-AI_TWEET_STYLES = {
-    "friendly": """
-You're a friendly Indian weather bot. Based on the forecast summary below, write a tweet.
-
-Requirements:
-- Max 280 characters
-- Start with emoji headline like: "🌦️ Weather Update"
-- Use 📍 to prefix zones (e.g., "📍 North Telangana: 🌧️ Rain in morning")
-- End with a friendly sign-off like "Stay safe!" or "Carry an umbrella! ☂️"
-- No hashtags
-""",
-    "rhyming": """
-You're a poetic Indian weather bot. Summarize the forecast in a lightly rhyming tweet.
-
-Requirements:
-- Max 280 characters
-- Start with emoji headline like: "🌤️ Sky's Tale"
-- Use 📍 to prefix zones
-- End with a rhyming friendly sign-off like "Pack your gear, cheer’s near!" or "Keep dry, don’t cry!"
-- No hashtags
-""",
-    "quirky": """
-You're a quirky, humorous Indian weather bot. Create a tweet with casual tone and playful emoji use.
-
-Requirements:
-- Max 280 characters
-- Start with something fun like: "🌈 Cloudy vibes"
-- Use 📍 before zones
-- End with something playful like "Duck if it drizzles!" or "Snack indoors, it pours!"
-- No hashtags
-""",
-    "news": """
-You're a serious Indian weather reporter. Write a crisp, informative tweet for today’s weather forecast.
-
-Requirements:
-- Max 280 characters
-- Start with 📰 or 📢 and a headline like: "📰 Telangana Weather"
-- Use 📍 to prefix zones
-- Sign off like "Details may evolve. Stay updated."
-- No hashtags or jokes
-"""
-}
-
-def generate_ai_tweet(summary_text, date_str):
-    bullet_summary = "\n".join(
-        [f"- {line}" for line in summary_text.splitlines() if line.strip()]
+def _is_wet(point):
+    pop = point["pop"]
+    return (
+        point["precip"] >= RAIN_MM
+        or (pop is not None and pop >= RAIN_POP)
+        or (point["rainy"] and point["precip"] >= 0.1)
     )
 
-    style_key = random.choice(list(AI_TWEET_STYLES.keys()))
-    style_prompt = AI_TWEET_STYLES[style_key].strip().format(date=date_str)
 
-    prompt = f"""{style_prompt}
+def _votes_needed(n):
+    # At least two sources must agree (when two or more report), and a majority when many do.
+    return max(min(2, n), math.ceil(n / 2))
 
-Forecast summary:
-{bullet_summary}
 
-Tweet:
-"""
+def detect_city_events(city, sources, now):
+    """Returns {label: [(hour, confidence), ...]} for the lookahead window."""
+    start, end = _hour(now), _hour(now) + timedelta(hours=LOOKAHEAD_HOURS)
+    by_hour = defaultdict(list)
+    for cities in sources.values():
+        for point in cities.get(city, []):
+            if start <= point["ts"] <= end:
+                by_hour[point["ts"]].append(point)
 
-    print(f"🧠 Using style: {style_key}")
+    events = defaultdict(list)
+    for ts in sorted(by_hour):
+        points = by_hour[ts]
+        n = len(points)
+        wet = [p for p in points if _is_wet(p)]
+        if len(wet) >= _votes_needed(n):
+            confidence = len(wet) / n
+            median_precip = statistics.median(p["precip"] for p in points)
+            if sum(p["thunder"] for p in wet) >= _votes_needed(n):
+                events["thunderstorm"].append((ts, confidence))
+            elif median_precip >= HEAVY_RAIN_MM:
+                events["heavy_rain"].append((ts, confidence))
+            else:
+                events["rain"].append((ts, confidence))
 
-    try:
-        response = cohere_client.chat(
-            model="command-a-03-2025",
-            message=prompt,
-            temperature=0.7,
-            max_tokens=280,
-            stop_sequences=["--"],
-        )
-        tweet = response.text.strip()
-        return tweet[:280]
-    except Exception as e:
-        print("❌ Cohere error:", e)
-        return None
-        
-def generate_pleasant_weather_tweet(date_str, current_weather=None):
-    prompt = f"""
-You're a friendly Indian weather bot. Today’s weather in Telangana is calm.
+        median_temp = statistics.median(p["temp"] for p in points)
+        if median_temp >= HEAT_C:
+            events["heat"].append((ts, 1.0))
+        if median_temp <= COLD_C:
+            events["cold"].append((ts, 1.0))
+    return events
 
-Write 1 cheerful tweet:
-- Start with emoji headline: “🌤️ Weather Update”
-- Mention no major events expected
-- Optionally include: "{current_weather}"
-- End with a warm sign-off like “Enjoy your day!”
 
-Tweet:
-"""
-    try:
-        response = cohere_client.generate(
-            model="command-r-plus",
-            prompt=prompt.strip(),
-            max_tokens=200,
-            temperature=0.7,
-            stop_sequences=["--"]
-        )
-        return response.generations[0].text.strip()[:280]
-    except Exception as e:
-        print("❌ Cohere error (pleasant):", e)
-        return None
-
-def tweet_weather():
-    date_str = datetime.now().strftime("%d %b")
-
-    tg_alerts = prepare_zone_alerts(ZONES)
-    hyd_alerts = prepare_zone_alerts(HYD_ZONES)
-
-    combined_alerts = {**tg_alerts, **hyd_alerts}
-
-    current_weather_data = fetch_current_weather("Hyderabad")
-    current_summary = summarize_current_weather(current_weather_data)
-
-    last_tweet = load_last_tweet()
-    previous_text = last_tweet["text"] if last_tweet else None
-
-    if combined_alerts:
-        summary_text = format_zone_summary(combined_alerts)
-        if current_summary:
-            summary_text = f"Current weather – {current_summary}\n\n" + summary_text
-
-        tweet_text = generate_ai_tweet(summary_text, date_str)
-
-        if tweet_text:
-            if tweet_text == previous_text:
-                print("⏭️ Duplicate tweet detected – skipping post.")
-                return
-
-            print("\n📝 Tweet content:\n", tweet_text, "\n")
-
-            try:
-                res = client.create_tweet(text=tweet_text)
-                print("✅ Weather alert tweet posted! Tweet ID:", res.data["id"])
-                save_last_tweet(tweet_text)
-            except tweepy.TooManyRequests:
-                print("❌ Rate limit hit.")
-            except Exception as e:
-                print("❌ Error tweeting:", e)
+def _windows(hours):
+    """Collapse sorted hours into contiguous (start, end) windows."""
+    windows = []
+    for ts in sorted(set(hours)):
+        if windows and ts - windows[-1][1] <= timedelta(hours=1):
+            windows[-1][1] = ts
         else:
-            print("❌ Failed to generate weather alert tweet.")
+            windows.append([ts, ts])
+    return [(s, e) for s, e in windows]
+
+
+def time_of_day(dt):
+    h = dt.hour
+    if h < 5:
+        return "late night"
+    if h < 8:
+        return "early morning"
+    if h < 12:
+        return "morning"
+    if h < 16:
+        return "afternoon"
+    if h < 19:
+        return "evening"
+    return "night"
+
+
+def describe_window(start, end, now):
+    def label(dt):
+        part = time_of_day(dt)
+        if dt.date() == now.date():
+            return "tonight" if part == "night" else part
+        if dt.date() == now.date() + timedelta(days=1):
+            return f"tomorrow {part}" if part not in ("late night",) else "overnight"
+        return f"{dt:%a} {part}"
+
+    clock = f"{start:%-I %p}–{(end + timedelta(hours=1)):%-I %p}"
+    first, last = label(start), label(end)
+    return {"when": first if first == last else f"{first} to {last}", "clock": clock}
+
+
+def build_zone_alerts(sources, now):
+    zone_alerts = {}
+    for zone, cities in ALL_ZONES.items():
+        per_label_hours = defaultdict(list)
+        per_label_cities = defaultdict(set)
+        per_label_conf = defaultdict(list)
+        for city in cities:
+            for label, hits in detect_city_events(city, sources, now).items():
+                per_label_hours[label].extend(ts for ts, _ in hits)
+                per_label_cities[label].add(city)
+                per_label_conf[label].extend(c for _, c in hits)
+
+        alerts = []
+        for label, hours in per_label_hours.items():
+            for start, end in _windows(hours):
+                alerts.append({
+                    "event": label,
+                    **describe_window(start, end, now),
+                    "start": start,
+                    "cities_affected": f"{len(per_label_cities[label])}/{len(cities)}",
+                    "source_agreement": f"{round(100 * statistics.mean(per_label_conf[label]))}%",
+                })
+        if alerts:
+            alerts.sort(key=lambda a: a["start"])
+            zone_alerts[zone] = alerts
+            print(f"🔍 {zone}: " + "; ".join(f"{a['event']} {a['when']}" for a in alerts))
+    return zone_alerts
+
+
+def alert_signature(zone_alerts):
+    """Coarse fingerprint so small timing shifts don't count as a new forecast."""
+    items = sorted(
+        (zone, a["event"], a["start"].date().isoformat(), time_of_day(a["start"]))
+        for zone, alerts in zone_alerts.items()
+        for a in alerts
+    )
+    return hashlib.sha256(json.dumps(items).encode()).hexdigest()[:16] if items else "calm"
+
+
+# ---------------------------------------------------------------------------
+# Tweet generation with Claude
+# ---------------------------------------------------------------------------
+
+TWEET_STYLES = {
+    "friendly": 'Warm and helpful. Headline like "🌦️ Weather Update". Friendly sign-off like "Stay safe!" or "Carry an umbrella! ☂️".',
+    "rhyming": 'Lightly rhyming and playful. Headline like "🌤️ Sky\'s Tale". Rhyming sign-off like "Keep dry, don\'t cry!".',
+    "quirky": 'Casual and humorous with playful emoji. Headline like "🌈 Cloudy vibes". Fun sign-off like "Duck if it drizzles!".',
+    "news": 'Crisp and serious, like a weather desk. Headline starting with 📰 or 📢, e.g. "📰 Telangana Weather". Sign off with "Details may evolve. Stay updated." No jokes.',
+}
+
+SYSTEM_PROMPT = """You write tweets for a weather account covering Telangana and Hyderabad, India.
+
+You receive a JSON forecast built from several weather models that were cross-checked against each other. Turn it into one tweet.
+
+Rules:
+- Hard limit: 270 characters. Emoji count as 2 characters, so be economical.
+- Use 📍 before zone names. Shorten zone names when space is tight (e.g. "N Telangana", "W Hyd"), and merge zones that share the same event and timing.
+- Lead with the most impactful events: thunderstorm > heavy rain > heat > rain > cold.
+- Use the "when" phrasing for timing; never invent events, places, or times that are not in the data.
+- No hashtags, no links, no quotation marks around the tweet.
+- Reply with the tweet text only."""
+
+
+def tweet_weight(text):
+    """Approximates X's weighted length: most non-Latin characters and emoji count as 2."""
+    weight = 0
+    for ch in text:
+        cp = ord(ch)
+        if 0xFE00 <= cp <= 0xFE0F or cp == 0x200D:
+            continue
+        if cp <= 0x10FF or 0x2000 <= cp <= 0x200D or 0x2010 <= cp <= 0x201F or 0x2032 <= cp <= 0x2037:
+            weight += 1
+        else:
+            weight += 2
+    return weight
+
+
+def _ask_claude(client, user_content):
+    response = client.beta.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=4000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        output_config={"effort": "low"},
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_content}],
+    )
+    if response.stop_reason in ("refusal", "max_tokens"):
+        print(f"❌ Claude stopped with {response.stop_reason}")
+        return None
+    text = "".join(b.text for b in response.content if b.type == "text").strip()
+    return text.strip('"').strip() or None
+
+
+def generate_tweet(zone_alerts, current, now):
+    style = random.choice(list(TWEET_STYLES))
+    print(f"🧠 Using style: {style}")
+
+    hyd_now = current.get("Hyderabad")
+    payload = {
+        "local_time": now.strftime("%a %d %b, %-I:%M %p IST"),
+        "forecast_window_hours": LOOKAHEAD_HOURS,
+        "hyderabad_now": hyd_now,
+        "alerts_by_zone": {
+            zone: [{k: v for k, v in a.items() if k != "start"} for a in alerts]
+            for zone, alerts in zone_alerts.items()
+        },
+    }
+    if zone_alerts:
+        task = "Write the alert tweet."
     else:
-        print("ℹ️ No alerts found – tweeting a pleasant weather update.")
-        tweet_text = generate_pleasant_weather_tweet(date_str, current_summary)
+        task = ("No significant weather is expected in the window. Write a short, cheerful "
+                "calm-weather tweet; mention Hyderabad's current temperature if given.")
 
-        if tweet_text:
-            if tweet_text == previous_text:
-                print("⏭️ Duplicate pleasant tweet – skipping.")
-                return
+    base = f"Style: {TWEET_STYLES[style]}\n\nForecast data:\n{json.dumps(payload, indent=2, ensure_ascii=False)}\n\n{task}"
 
-            try:
-                res = client.create_tweet(text=tweet_text)
-                print("✅ Pleasant weather tweet posted! Tweet ID:", res.data["id"])
-                save_last_tweet(tweet_text)
-            except tweepy.TooManyRequests:
-                print("❌ Rate limit hit while tweeting pleasant weather.")
-            except Exception as e:
-                print("❌ Error tweeting pleasant weather:", e)
-        else:
-            print("❌ Failed to generate pleasant weather tweet.")
+    try:
+        client = anthropic.Anthropic()
+        tweet = _ask_claude(client, base)
+        if tweet and tweet_weight(tweet) > MAX_TWEET_WEIGHT:
+            print(f"✂️ Draft too long ({tweet_weight(tweet)}), asking for a shorter one")
+            tweet = _ask_claude(
+                client,
+                f"{base}\n\nA previous draft was {tweet_weight(tweet)} weighted characters, over the limit. "
+                f"Write a tighter version under 250 weighted characters:\n{tweet}",
+            )
+    except anthropic.APIError as e:
+        print(f"❌ Claude API error: {type(e).__name__} {e}")
+        return None
+
+    if tweet and tweet_weight(tweet) > MAX_TWEET_WEIGHT:
+        print(f"❌ Tweet still too long ({tweet_weight(tweet)}) – not posting")
+        return None
+    return tweet
+
+
+# ---------------------------------------------------------------------------
+# State (GitHub Gist) and posting
+# ---------------------------------------------------------------------------
+
+def _gist_headers():
+    return {"Authorization": f"token {GIST_TOKEN}", "Accept": "application/vnd.github+json"}
+
+
+def load_last_tweet():
+    if not (GIST_ID and GIST_TOKEN):
+        return None
+    try:
+        response = HTTP.get(f"https://api.github.com/gists/{GIST_ID}", headers=_gist_headers(), timeout=10)
+        response.raise_for_status()
+        file = response.json().get("files", {}).get(LAST_TWEET_FILENAME)
+        return json.loads(file["content"]) if file else None
+    except Exception as e:
+        print("⚠️ Couldn't load last tweet:", e)
+        return None
+
+
+def save_last_tweet(text, signature, now):
+    payload = {"files": {LAST_TWEET_FILENAME: {"content": json.dumps(
+        {"text": text, "signature": signature, "posted_at": now.isoformat()}, ensure_ascii=False
+    )}}}
+    response = HTTP.patch(f"https://api.github.com/gists/{GIST_ID}", headers=_gist_headers(), json=payload, timeout=10)
+    print("✅ Last tweet saved to Gist" if response.ok else f"❌ Failed to save last tweet: {response.status_code}")
+
+
+def is_duplicate(last, signature, now):
+    if not last or last.get("signature") != signature or not last.get("posted_at"):
+        return False
+    window = CALM_DEDUP_HOURS if signature == "calm" else DEDUP_HOURS
+    return now - datetime.fromisoformat(last["posted_at"]) < timedelta(hours=window)
+
+
+def post_tweet(text):
+    client = tweepy.Client(
+        bearer_token=os.getenv("BEARER_TOKEN"),
+        consumer_key=os.getenv("API_KEY"),
+        consumer_secret=os.getenv("API_SECRET"),
+        access_token=os.getenv("ACCESS_TOKEN"),
+        access_token_secret=os.getenv("ACCESS_SECRET"),
+    )
+    res = client.create_tweet(text=text)
+    print("✅ Tweet posted! ID:", res.data["id"])
+
+
+def tweet_weather(dry_run=False):
+    now = datetime.now(IST)
+    sources, current = fetch_all_sources()
+    if not sources:
+        print("❌ No forecast sources returned data – aborting.")
+        return
+    print(f"📡 Sources in consensus: {', '.join(sources)}")
+
+    zone_alerts = build_zone_alerts(sources, now)
+    signature = alert_signature(zone_alerts)
+    if not zone_alerts:
+        print("ℹ️ No significant weather in the next", LOOKAHEAD_HOURS, "hours.")
+
+    last = load_last_tweet()
+    if is_duplicate(last, signature, now):
+        print(f"⏭️ Same forecast ({signature}) already tweeted at {last['posted_at']} – skipping.")
+        return
+
+    if dry_run and not os.getenv("ANTHROPIC_API_KEY"):
+        print("🧪 Dry run without ANTHROPIC_API_KEY – stopping before tweet generation.")
+        return
+
+    tweet = generate_tweet(zone_alerts, current, now)
+    if not tweet:
+        print("❌ Failed to generate tweet.")
+        return
+
+    print(f"\n📝 Tweet ({tweet_weight(tweet)}/{MAX_TWEET_WEIGHT}):\n{tweet}\n")
+    if dry_run:
+        print("🧪 Dry run – not posting or saving state.")
+        return
+
+    try:
+        post_tweet(tweet)
+    except tweepy.TooManyRequests:
+        print("❌ Rate limit hit.")
+        return
+    except Exception as e:
+        print("❌ Error tweeting:", e)
+        return
+    save_last_tweet(tweet, signature, now)
+
 
 if __name__ == "__main__":
-    tweet_weather()
+    parser = argparse.ArgumentParser(description="Post a Telangana/Hyderabad weather tweet.")
+    parser.add_argument("--dry-run", action="store_true", help="Print the tweet without posting or writing state")
+    args = parser.parse_args()
+    tweet_weather(dry_run=args.dry_run or os.getenv("DRY_RUN") == "1")

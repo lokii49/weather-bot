@@ -1,7 +1,4 @@
+anthropic>=1.11
 tweepy
-python-dotenv
 requests
-schedule
-pytz
-cohere
-PyGithub
+python-dotenv

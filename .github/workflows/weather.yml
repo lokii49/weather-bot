@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '30 0/3 * * *'  # runs every 3 hours starting at 00:30 UTC (06:00 IST)
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the tweet without posting'
+        type: boolean
+        default: false
 
 jobs:
   tweet:
@@ -11,20 +16,21 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.12'
+          cache: pip
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Run weather bot
         env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           API_KEY: ${{ secrets.API_KEY }}
-          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
           API_SECRET: ${{ secrets.API_SECRET }}
           ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
           ACCESS_SECRET: ${{ secrets.ACCESS_SECRET }}
@@ -33,4 +39,5 @@ jobs:
           OPENWEATHER_KEY: ${{ secrets.OPENWEATHER_KEY }}
           GIST_ID: ${{ secrets.GIST_ID }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
         run: python bot.py
