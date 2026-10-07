@@ -3,7 +3,6 @@ import hashlib
 import json
 import math
 import os
-import random
 import statistics
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -268,7 +267,10 @@ def _votes_needed(n):
 
 
 def detect_city_events(city, sources, now):
-    """Returns {label: [(hour, confidence), ...]} for the lookahead window."""
+    """Returns {label: [(hour, confidence, value), ...]} for the lookahead window.
+
+    value is the median precip (mm/h) for rain events and the median temp for heat/cold.
+    """
     start, end = _hour(now), _hour(now) + timedelta(hours=LOOKAHEAD_HOURS)
     by_hour = defaultdict(list)
     for cities in sources.values():
@@ -285,25 +287,25 @@ def detect_city_events(city, sources, now):
             confidence = len(wet) / n
             median_precip = statistics.median(p["precip"] for p in points)
             if sum(p["thunder"] for p in wet) >= _votes_needed(n):
-                events["thunderstorm"].append((ts, confidence))
+                events["thunderstorm"].append((ts, confidence, median_precip))
             elif median_precip >= HEAVY_RAIN_MM:
-                events["heavy_rain"].append((ts, confidence))
+                events["heavy_rain"].append((ts, confidence, median_precip))
             else:
-                events["rain"].append((ts, confidence))
+                events["rain"].append((ts, confidence, median_precip))
 
         median_temp = statistics.median(p["temp"] for p in points)
         if median_temp >= HEAT_C:
-            events["heat"].append((ts, 1.0))
+            events["heat"].append((ts, 1.0, median_temp))
         if median_temp <= COLD_C:
-            events["cold"].append((ts, 1.0))
+            events["cold"].append((ts, 1.0, median_temp))
     return events
 
 
 def _windows(hours):
-    """Collapse sorted hours into contiguous (start, end) windows."""
+    """Collapse sorted hours into (start, end) windows, bridging gaps of up to two dry hours."""
     windows = []
     for ts in sorted(set(hours)):
-        if windows and ts - windows[-1][1] <= timedelta(hours=1):
+        if windows and ts - windows[-1][1] <= timedelta(hours=3):
             windows[-1][1] = ts
         else:
             windows.append([ts, ts])
@@ -339,32 +341,41 @@ def describe_window(start, end, now):
     return {"when": first if first == last else f"{first} to {last}", "clock": clock}
 
 
+def _intensity(label, values):
+    if label in ("heat", "cold"):
+        return f"{round(max(values) if label == 'heat' else min(values))}°C"
+    peak = max(values)
+    if label == "heavy_rain" or peak >= HEAVY_RAIN_MM:
+        return "heavy"
+    return "moderate" if peak >= 2.5 else "light"
+
+
 def build_zone_alerts(sources, now):
     zone_alerts = {}
     for zone, cities in ALL_ZONES.items():
-        per_label_hours = defaultdict(list)
-        per_label_cities = defaultdict(set)
-        per_label_conf = defaultdict(list)
+        hits = defaultdict(list)  # label -> [(ts, city, confidence, value)]
         for city in cities:
-            for label, hits in detect_city_events(city, sources, now).items():
-                per_label_hours[label].extend(ts for ts, _ in hits)
-                per_label_cities[label].add(city)
-                per_label_conf[label].extend(c for _, c in hits)
+            for label, city_hits in detect_city_events(city, sources, now).items():
+                hits[label].extend((ts, city, conf, value) for ts, conf, value in city_hits)
 
         alerts = []
-        for label, hours in per_label_hours.items():
-            for start, end in _windows(hours):
+        for label, label_hits in hits.items():
+            for start, end in _windows(h[0] for h in label_hits):
+                in_window = [h for h in label_hits if start <= h[0] <= end]
+                affected = sorted({h[1] for h in in_window})
                 alerts.append({
                     "event": label,
+                    "intensity": _intensity(label, [h[3] for h in in_window]),
                     **describe_window(start, end, now),
                     "start": start,
-                    "cities_affected": f"{len(per_label_cities[label])}/{len(cities)}",
-                    "source_agreement": f"{round(100 * statistics.mean(per_label_conf[label]))}%",
+                    "places": affected,
+                    "coverage": f"{len(affected)}/{len(cities)} locations",
+                    "model_agreement": f"{round(100 * statistics.mean(h[2] for h in in_window))}%",
                 })
         if alerts:
             alerts.sort(key=lambda a: a["start"])
             zone_alerts[zone] = alerts
-            print(f"🔍 {zone}: " + "; ".join(f"{a['event']} {a['when']}" for a in alerts))
+            print(f"🔍 {zone}: " + "; ".join(f"{a['intensity']} {a['event']} {a['when']}" for a in alerts))
     return zone_alerts
 
 
@@ -382,24 +393,46 @@ def alert_signature(zone_alerts):
 # Tweet generation with Claude
 # ---------------------------------------------------------------------------
 
-TWEET_STYLES = {
-    "friendly": 'Warm and helpful. Headline like "🌦️ Weather Update". Friendly sign-off like "Stay safe!" or "Carry an umbrella! ☂️".',
-    "rhyming": 'Lightly rhyming and playful. Headline like "🌤️ Sky\'s Tale". Rhyming sign-off like "Keep dry, don\'t cry!".',
-    "quirky": 'Casual and humorous with playful emoji. Headline like "🌈 Cloudy vibes". Fun sign-off like "Duck if it drizzles!".',
-    "news": 'Crisp and serious, like a weather desk. Headline starting with 📰 or 📢, e.g. "📰 Telangana Weather". Sign off with "Details may evolve. Stay updated." No jokes.',
+WMO_CONDITIONS = {
+    0: "Clear", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast", 45: "Fog", 48: "Fog",
+    51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle", 61: "Light rain", 63: "Rain", 65: "Heavy rain",
+    80: "Light showers", 81: "Showers", 82: "Heavy showers", 95: "Thunderstorm", 96: "Thunderstorm", 99: "Thunderstorm",
 }
 
-SYSTEM_PROMPT = """You write tweets for a weather account covering Telangana and Hyderabad, India.
+SYSTEM_PROMPT = """You are the forecast desk for a weather account covering Telangana and Hyderabad, India. You turn a structured forecast into one tweet.
 
-You receive a JSON forecast built from several weather models that were cross-checked against each other. Turn it into one tweet.
+The forecast comes from up to five weather models (ECMWF, GFS, ICON, OpenWeatherMap, WeatherAPI). An event appears only when several models agree, so treat every event in the data as real and report nothing beyond it.
 
-Rules:
-- Hard limit: 270 characters. Emoji count as 2 characters, so be economical.
-- Use 📍 before zone names. Shorten zone names when space is tight (e.g. "N Telangana", "W Hyd"), and merge zones that share the same event and timing.
-- Lead with the most impactful events: thunderstorm > heavy rain > heat > rain > cold.
-- Use the "when" phrasing for timing; never invent events, places, or times that are not in the data.
-- No hashtags, no links, no quotation marks around the tweet.
-- Reply with the tweet text only."""
+Voice: a professional weather service, in the manner of IMD or a newsroom weather desk. Factual, calm, specific. Readers act on these posts, so precision matters more than personality: no rhymes, jokes, puns, exclamation marks, rhetorical flourishes, or sign-offs such as "Stay safe!".
+
+Format:
+1. Header: "<emoji> Telangana Weather | <Day> <D> <Mon>, <H> <AM/PM>" using local_time rounded down to the hour. Pick the emoji for the most severe event: ⛈️ thunderstorm, 🌧️ heavy or moderate rain, 🌦️ light rain, 🔥 heat, 🌡️ cold, 🌤️ nothing significant.
+2. A blank line, then one line per area, most severe first (thunderstorm > heavy rain > heat > rain > cold):
+   "📍 <Area>: <Intensity> <event> <when> (<clock>)"
+   - Combine zones that share the same event and timing ("📍 North & East Telangana: ...").
+   - Name one or two places from "places" when coverage is partial ("Moderate rain around Warangal, Khammam tonight (8–11 PM)").
+   - Write Hyderabad zones as "Hyderabad" when all of them share the event, otherwise as "West Hyderabad" etc.
+3. If Hyderabad has no alert, add: "📍 Hyderabad: <condition>, <temp>°C" from hyderabad_now.
+4. Only for thunderstorms, heavy rain, or heat, end with one short advisory line starting with "⚠️" (e.g. "⚠️ Avoid open areas and trees during lightning.").
+
+Use the 12-hour clock ranges as given. Shorten zone names ("N Telangana", "W Hyd") only if needed to fit. No hashtags, links, or quotation marks. Hard limit 260 characters, with each emoji counting as 2.
+
+Example (alerts):
+⛈️ Telangana Weather | Wed 7 Oct, 6 PM
+
+📍 East Telangana: Thunderstorms around Khammam, Bhadrachalam tonight (8–11 PM)
+📍 South Telangana: Light rain overnight (1–4 AM)
+📍 Hyderabad: Partly cloudy, 27°C
+
+⚠️ Avoid open areas and trees during lightning.
+
+Example (no alerts):
+🌤️ Telangana Weather | Thu 8 Oct, 9 AM
+
+No significant rain, heat or cold expected across Telangana in the next 12 hours.
+📍 Hyderabad: Mainly clear, 29°C
+
+Reply with the tweet text only."""
 
 
 def tweet_weight(text):
@@ -434,12 +467,14 @@ def _ask_claude(client, user_content):
 
 
 def generate_tweet(zone_alerts, current, now):
-    style = random.choice(list(TWEET_STYLES))
-    print(f"🧠 Using style: {style}")
-
     hyd_now = current.get("Hyderabad")
+    if hyd_now:
+        hyd_now = {
+            "condition": WMO_CONDITIONS.get(int(hyd_now["wmo_code"] or 0), "Clear"),
+            "temp_c": round(hyd_now["temp_c"]),
+        }
     payload = {
-        "local_time": now.strftime("%a %d %b, %-I:%M %p IST"),
+        "local_time": now.strftime("%a %-d %b, %-I:%M %p IST"),
         "forecast_window_hours": LOOKAHEAD_HOURS,
         "hyderabad_now": hyd_now,
         "alerts_by_zone": {
@@ -447,13 +482,7 @@ def generate_tweet(zone_alerts, current, now):
             for zone, alerts in zone_alerts.items()
         },
     }
-    if zone_alerts:
-        task = "Write the alert tweet."
-    else:
-        task = ("No significant weather is expected in the window. Write a short, cheerful "
-                "calm-weather tweet; mention Hyderabad's current temperature if given.")
-
-    base = f"Style: {TWEET_STYLES[style]}\n\nForecast data:\n{json.dumps(payload, indent=2, ensure_ascii=False)}\n\n{task}"
+    base = f"Forecast data:\n{json.dumps(payload, indent=2, ensure_ascii=False)}"
 
     try:
         client = anthropic.Anthropic()
