@@ -48,8 +48,10 @@ Env vars (from `.env` locally, GitHub secrets in CI):
    - `SYSTEM_PROMPT` fixes one professional forecast-desk format: a header, one `📍` line per area, and a `⚠️` advisory only for severe events. The user message is the JSON payload alone (alerts with intensity, places, coverage, model agreement, and Hyderabad's current condition).
    - Server-side refusal fallbacks are on (`fallbacks="default"`).
    - `tweet_weight` approximates X's weighted length (emoji count as 2). An over-length draft is regenerated once, then dropped. It is never truncated.
-6. **Dedup and post**: `alert_signature` hashes the (zone, event, date, time-of-day) tuples. The run is skipped if the same signature was posted within `DEDUP_HOURS`, or `CALM_DEDUP_HOURS` for the calm signature.
+6. **Posting policy** (`skip_reason`), checked before calling Claude so skipped runs cost nothing:
+   - Alerts post whenever they change. `alert_signature` hashes the (zone, event, date, time-of-day) tuples, and the same signature is not reposted within `DEDUP_HOURS`.
+   - Calm weather (signature `"calm"`) posts once per day, only during `CALM_POST_HOURS` (IST morning). The scheduled runs at 06:00 and 09:00 IST fall in that window, so a late or missed cron run still gets a chance.
 
 ### Persistent state (GitHub Gist)
 
-CI has no disk persistence. `last_tweet.json` in the Gist holds `{text, signature, posted_at}`. The Gist is read once per run and written only after a successful post.
+CI has no disk persistence. `last_tweet.json` in the Gist holds `{text, signature, posted_at, last_calm_date}`. The Gist is read once per run and written only after a successful post.

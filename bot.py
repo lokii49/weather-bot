@@ -73,9 +73,9 @@ HEAVY_RAIN_MM = 7.5    # median mm/h across sources (IMD "heavy" is ~7.5 mm/h)
 HEAT_C = 40
 COLD_C = 20
 
-# Duplicate suppression
+# Posting policy: alerts post whenever they change; calm weather posts once per morning
 DEDUP_HOURS = 6
-CALM_DEDUP_HOURS = 12
+CALM_POST_HOURS = range(6, 11)  # IST hours in which the daily calm update may go out
 
 OPEN_METEO_MODELS = {
     "ecmwf": "ecmwf_ifs025",
@@ -526,19 +526,29 @@ def load_last_tweet():
         return None
 
 
-def save_last_tweet(text, signature, now):
-    payload = {"files": {LAST_TWEET_FILENAME: {"content": json.dumps(
-        {"text": text, "signature": signature, "posted_at": now.isoformat()}, ensure_ascii=False
-    )}}}
+def save_last_tweet(text, signature, now, last):
+    state = {"text": text, "signature": signature, "posted_at": now.isoformat()}
+    calm_date = now.date().isoformat() if signature == "calm" else (last or {}).get("last_calm_date")
+    if calm_date:
+        state["last_calm_date"] = calm_date
+    payload = {"files": {LAST_TWEET_FILENAME: {"content": json.dumps(state, ensure_ascii=False)}}}
     response = HTTP.patch(f"https://api.github.com/gists/{GIST_ID}", headers=_gist_headers(), json=payload, timeout=10)
     print("✅ Last tweet saved to Gist" if response.ok else f"❌ Failed to save last tweet: {response.status_code}")
 
 
-def is_duplicate(last, signature, now):
-    if not last or last.get("signature") != signature or not last.get("posted_at"):
-        return False
-    window = CALM_DEDUP_HOURS if signature == "calm" else DEDUP_HOURS
-    return now - datetime.fromisoformat(last["posted_at"]) < timedelta(hours=window)
+def skip_reason(last, signature, now):
+    """Returns why this run should not post, or None if it should."""
+    if signature == "calm":
+        if now.hour not in CALM_POST_HOURS:
+            return f"calm weather outside the morning window ({CALM_POST_HOURS.start}–{CALM_POST_HOURS.stop} IST)"
+        if last and last.get("last_calm_date") == now.date().isoformat():
+            return "today's calm-weather update already posted"
+        return None
+    if last and last.get("signature") == signature and last.get("posted_at"):
+        posted_at = datetime.fromisoformat(last["posted_at"])
+        if now - posted_at < timedelta(hours=DEDUP_HOURS):
+            return f"same alerts ({signature}) already tweeted at {last['posted_at']}"
+    return None
 
 
 def post_tweet(text):
@@ -567,8 +577,9 @@ def tweet_weather(dry_run=False):
         print("ℹ️ No significant weather in the next", LOOKAHEAD_HOURS, "hours.")
 
     last = load_last_tweet()
-    if is_duplicate(last, signature, now):
-        print(f"⏭️ Same forecast ({signature}) already tweeted at {last['posted_at']} – skipping.")
+    reason = skip_reason(last, signature, now)
+    if reason:
+        print(f"⏭️ Not posting: {reason}.")
         return
 
     if dry_run and not os.getenv("ANTHROPIC_API_KEY"):
@@ -593,7 +604,7 @@ def tweet_weather(dry_run=False):
     except Exception as e:
         print("❌ Error tweeting:", e)
         return
-    save_last_tweet(tweet, signature, now)
+    save_last_tweet(tweet, signature, now, last)
 
 
 if __name__ == "__main__":
