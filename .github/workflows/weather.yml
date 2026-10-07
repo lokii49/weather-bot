@@ -2,7 +2,7 @@ name: Daily Weather Tweet
 
 on:
   schedule:
-    - cron: '30 0/3 * * *'  # runs every 3 hours starting at 00:30 UTC (06:00 IST)
+    - cron: '30 * * * *'  # hourly at :30 UTC (:00 IST); bot.py decides which runs post
   workflow_dispatch:
     inputs:
       dry_run:

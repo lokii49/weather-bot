@@ -29,7 +29,7 @@ Env vars (from `.env` locally, GitHub secrets in CI):
 
 ## Deployment
 
-`.github/workflows/weather.yml` runs at minute 30 of every third hour UTC. Manual `workflow_dispatch` runs have a `dry_run` checkbox. CI is the only production runtime: pushing to `main` makes changes live, and any new env var must also be added to the workflow's `env:` block. GitHub disables scheduled workflows after 60 days with no repo activity; re-enable with `gh workflow enable weather.yml`.
+`.github/workflows/weather.yml` runs hourly at minute 30 UTC (on the hour in IST); `posting_decision` decides which runs actually post. Manual `workflow_dispatch` runs have a `dry_run` checkbox. CI is the only production runtime: pushing to `main` makes changes live, and any new env var must also be added to the workflow's `env:` block. GitHub disables scheduled workflows after 60 days with no repo activity; re-enable with `gh workflow enable weather.yml`.
 
 ## Architecture (flow of `tweet_weather()`)
 
@@ -48,10 +48,15 @@ Env vars (from `.env` locally, GitHub secrets in CI):
    - `SYSTEM_PROMPT` fixes one professional forecast-desk format: a header, one `📍` line per area, and a `⚠️` advisory only for severe events. The user message is the JSON payload alone (alerts with intensity, places, coverage, model agreement, and Hyderabad's current condition).
    - Server-side refusal fallbacks are on (`fallbacks="default"`).
    - `tweet_weight` approximates X's weighted length (emoji count as 2). An over-length draft is regenerated once, then dropped. It is never truncated.
-6. **Posting policy** (`skip_reason`), checked before calling Claude so skipped runs cost nothing:
-   - Alerts post whenever they change. `alert_signature` hashes the (zone, event, date, time-of-day) tuples, and the same signature is not reposted within `DEDUP_HOURS`.
-   - Calm weather (signature `"calm"`) posts once per day, only during `CALM_POST_HOURS` (IST morning). The scheduled runs at 06:00 and 09:00 IST fall in that window, so a late or missed cron run still gets a chance.
+6. **Posting policy** (`posting_decision`), checked before calling Claude so skipped runs cost only the forecast fetch. It returns an `update_type` that the prompt uses to pick the header and framing:
+   - **Severe** (`SEVERE_EVENTS`: thunderstorm, heavy rain, heat):
+     - Severe weather the last post didn't cover posts immediately as `escalation`.
+     - A changed severe forecast posts after `SEVERE_MIN_GAP_HOURS`, and an unchanged one repeats every `SEVERE_REPEAT_HOURS`, both as `severe_update`.
+     - When severe weather drops out of the forecast, the bot posts `all_clear`.
+   - **Non-severe alerts** (`regular`) post at most every `NORMAL_MIN_GAP_HOURS`. An unchanged forecast isn't repeated within `DEDUP_HOURS`. `alert_signature` hashes the (zone, event, date, time-of-day) tuples.
+   - **Calm** (signature `"calm"`) posts once per day during `CALM_POST_HOURS` (IST morning).
+   - `severe_update` and `all_clear` pass the previous tweet to Claude so it can say what changed.
 
 ### Persistent state (GitHub Gist)
 
-CI has no disk persistence. `last_tweet.json` in the Gist holds `{text, signature, posted_at, last_calm_date}`. The Gist is read once per run and written only after a successful post.
+CI has no disk persistence. `last_tweet.json` in the Gist holds `{text, signature, severe, posted_at, last_calm_date}`. The Gist is read once per run and written only after a successful post.

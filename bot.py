@@ -73,8 +73,12 @@ HEAVY_RAIN_MM = 7.5    # median mm/h across sources (IMD "heavy" is ~7.5 mm/h)
 HEAT_C = 40
 COLD_C = 20
 
-# Posting policy: alerts post whenever they change; calm weather posts once per morning
-DEDUP_HOURS = 6
+# Posting policy (the workflow runs hourly; these decide which runs actually post)
+SEVERE_EVENTS = {"thunderstorm", "heavy_rain", "heat"}
+SEVERE_MIN_GAP_HOURS = 1     # severe forecast changed: post as soon as an hour has passed
+SEVERE_REPEAT_HOURS = 3      # severe forecast unchanged: repeat it this often while it lasts
+NORMAL_MIN_GAP_HOURS = 3     # non-severe alerts: at most one post per this many hours
+DEDUP_HOURS = 6              # non-severe alerts: don't repeat an unchanged forecast within this
 CALM_POST_HOURS = range(6, 11)  # IST hours in which the daily calm update may go out
 
 OPEN_METEO_MODELS = {
@@ -416,6 +420,12 @@ Format:
 3. If Hyderabad has no alert, add: "📍 Hyderabad: <condition>, <temp>°C" from hyderabad_now.
 4. Only for thunderstorms, heavy rain, or heat, end with one short advisory line starting with "⚠️" (e.g. "⚠️ Avoid open areas and trees during lightning.").
 
+update_type changes the header and framing:
+- "regular" or "calm": the format above.
+- "escalation": severe weather that the last post did not mention. Header "🚨 Weather Alert | <Day> <D> <Mon>, <H> <AM/PM>". Put the severe lines first, and always end with the ⚠️ advisory.
+- "severe_update": severe weather is ongoing or has shifted. Header "⚠️ Weather Update | <Day> <D> <Mon>, <H> <AM/PM>". Compare with previous_tweet and state what changed in a few words where it helps ("now expected until 11 PM", "spreading to South Telangana").
+- "all_clear": the severe weather in previous_tweet is no longer forecast. Header "✅ Weather Update | <Day> <D> <Mon>, <H> <AM/PM>". First line says the threat has eased for the areas previous_tweet named, then list any remaining non-severe alerts and the Hyderabad line.
+
 Use the 12-hour clock ranges as given. Shorten zone names ("N Telangana", "W Hyd") only if needed to fit. No hashtags, links, or quotation marks. Hard limit 260 characters, with each emoji counting as 2.
 
 Example (alerts):
@@ -467,7 +477,7 @@ def _ask_claude(client, user_content):
     return text.strip('"').strip() or None
 
 
-def generate_tweet(zone_alerts, current, now):
+def generate_tweet(zone_alerts, current, now, update_type, previous_tweet):
     hyd_now = current.get("Hyderabad")
     if hyd_now:
         hyd_now = {
@@ -477,6 +487,8 @@ def generate_tweet(zone_alerts, current, now):
     payload = {
         "local_time": now.strftime("%a %-d %b, %-I:%M %p IST"),
         "forecast_window_hours": LOOKAHEAD_HOURS,
+        "update_type": update_type,
+        "previous_tweet": previous_tweet if update_type in ("severe_update", "all_clear") else None,
         "hyderabad_now": hyd_now,
         "alerts_by_zone": {
             zone: [{k: v for k, v in a.items() if k != "start"} for a in alerts]
@@ -526,8 +538,8 @@ def load_last_tweet():
         return None
 
 
-def save_last_tweet(text, signature, now, last):
-    state = {"text": text, "signature": signature, "posted_at": now.isoformat()}
+def save_last_tweet(text, signature, severe, now, last):
+    state = {"text": text, "signature": signature, "severe": severe, "posted_at": now.isoformat()}
     calm_date = now.date().isoformat() if signature == "calm" else (last or {}).get("last_calm_date")
     if calm_date:
         state["last_calm_date"] = calm_date
@@ -536,19 +548,50 @@ def save_last_tweet(text, signature, now, last):
     print("✅ Last tweet saved to Gist" if response.ok else f"❌ Failed to save last tweet: {response.status_code}")
 
 
-def skip_reason(last, signature, now):
-    """Returns why this run should not post, or None if it should."""
+def is_severe(zone_alerts):
+    return any(a["event"] in SEVERE_EVENTS for alerts in zone_alerts.values() for a in alerts)
+
+
+def posting_decision(last, zone_alerts, signature, now):
+    """Returns (update_type, None) to post or (None, reason) to skip.
+
+    update_type tells the prompt how to frame the tweet: "regular", "escalation"
+    (new severe weather), "severe_update" (severe weather changed or ongoing),
+    "all_clear" (severe weather has ended) or "calm".
+    """
+    last = last or {}
+    severe = is_severe(zone_alerts)
+    was_severe = bool(last.get("severe"))
+    same = last.get("signature") == signature
+    hours_since = (
+        (now - datetime.fromisoformat(last["posted_at"])).total_seconds() / 3600
+        if last.get("posted_at") else math.inf
+    )
+
+    if severe:
+        if not was_severe:
+            return "escalation", None
+        if not same and hours_since >= SEVERE_MIN_GAP_HOURS:
+            return "severe_update", None
+        if same and hours_since >= SEVERE_REPEAT_HOURS:
+            return "severe_update", None
+        return None, f"severe weather already covered {hours_since:.1f}h ago"
+
+    if was_severe:
+        return "all_clear", None
+
     if signature == "calm":
         if now.hour not in CALM_POST_HOURS:
-            return f"calm weather outside the morning window ({CALM_POST_HOURS.start}–{CALM_POST_HOURS.stop} IST)"
-        if last and last.get("last_calm_date") == now.date().isoformat():
-            return "today's calm-weather update already posted"
-        return None
-    if last and last.get("signature") == signature and last.get("posted_at"):
-        posted_at = datetime.fromisoformat(last["posted_at"])
-        if now - posted_at < timedelta(hours=DEDUP_HOURS):
-            return f"same alerts ({signature}) already tweeted at {last['posted_at']}"
-    return None
+            return None, f"calm weather outside the morning window ({CALM_POST_HOURS.start}–{CALM_POST_HOURS.stop} IST)"
+        if last.get("last_calm_date") == now.date().isoformat():
+            return None, "today's calm-weather update already posted"
+        return "calm", None
+
+    if same and hours_since < DEDUP_HOURS:
+        return None, f"same alerts ({signature}) already tweeted {hours_since:.1f}h ago"
+    if hours_since < NORMAL_MIN_GAP_HOURS:
+        return None, f"last post was {hours_since:.1f}h ago (minimum {NORMAL_MIN_GAP_HOURS}h for non-severe alerts)"
+    return "regular", None
 
 
 def post_tweet(text):
@@ -577,16 +620,17 @@ def tweet_weather(dry_run=False):
         print("ℹ️ No significant weather in the next", LOOKAHEAD_HOURS, "hours.")
 
     last = load_last_tweet()
-    reason = skip_reason(last, signature, now)
+    update_type, reason = posting_decision(last, zone_alerts, signature, now)
     if reason:
         print(f"⏭️ Not posting: {reason}.")
         return
+    print(f"📣 Posting: {update_type}")
 
     if dry_run and not os.getenv("ANTHROPIC_API_KEY"):
         print("🧪 Dry run without ANTHROPIC_API_KEY – stopping before tweet generation.")
         return
 
-    tweet = generate_tweet(zone_alerts, current, now)
+    tweet = generate_tweet(zone_alerts, current, now, update_type, (last or {}).get("text"))
     if not tweet:
         print("❌ Failed to generate tweet.")
         return
@@ -604,7 +648,7 @@ def tweet_weather(dry_run=False):
     except Exception as e:
         print("❌ Error tweeting:", e)
         return
-    save_last_tweet(tweet, signature, now, last)
+    save_last_tweet(tweet, signature, is_severe(zone_alerts), now, last)
 
 
 if __name__ == "__main__":
