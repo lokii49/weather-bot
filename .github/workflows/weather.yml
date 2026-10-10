@@ -2,7 +2,10 @@ name: Daily Weather Tweet
 
 on:
   schedule:
-    - cron: '5,35 * * * *'  # every 30 min (:05/:35 UTC, off the busy top of the hour); bot.py decides which runs post
+    # Fallback only. GitHub drops most scheduled runs under load, so an external
+    # pinger triggers workflow_dispatch every 30 min; the gate job skips cron runs
+    # while that is working. bot.py decides which runs post.
+    - cron: '5,35 * * * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -10,8 +13,36 @@ on:
         type: boolean
         default: false
 
+# Serialize runs so a cron run and a dispatched run never race on the Gist.
+concurrency:
+  group: weather-bot
+  cancel-in-progress: false
+
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      # A cron run within 40 min of a dispatched run would make two near-simultaneous
+      # runs count as the "two consecutive runs" that confirm severe alerts.
+      - name: Skip cron run if the external trigger is working
+        id: check
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          since=$(date -u -d '40 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+          recent=$(gh run list -R "$GITHUB_REPOSITORY" --workflow weather.yml --event workflow_dispatch --limit 5 \
+            --json createdAt,conclusion --jq "[.[] | select(.createdAt >= \"$since\" and .conclusion != \"failure\" and .conclusion != \"cancelled\")] | length")
+          echo "dispatched runs in last 40 min: $recent"
+          if [ "$recent" -gt 0 ]; then echo "skip=true" >> "$GITHUB_OUTPUT"; fi
+
   tweet:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-latest
 
     steps:
